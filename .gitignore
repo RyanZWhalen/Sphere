@@ -219,3 +219,11 @@ __marimo__/
 
 # Project-local Codex context, scratch notes, and generated development artifacts.
 .codex/
+
+# Frontend build dependencies are restored from frontend/package-lock.json.
+frontend/node_modules/
+
+# The prebuilt local UI ships with the Python package; other dist directories stay ignored.
+!sphere/web/
+!sphere/web/dist/
+!sphere/web/dist/**

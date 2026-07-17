@@ -11,5 +11,17 @@ dependencies = [
     "packaging>=24",
 ]
 
+[project.optional-dependencies]
+serve = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+]
+
+[project.scripts]
+sphere = "sphere.serve:main"
+
 [tool.setuptools]
 packages = ["sphere"]
+
+[tool.setuptools.package-data]
+sphere = ["web/dist/**"]
