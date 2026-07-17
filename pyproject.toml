@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sphere"
+version = "0.1.0"
+description = "Machine-level Python topology introspection"
+requires-python = ">=3.11"
+dependencies = [
+    "packaging>=24",
+]
+
+[tool.setuptools]
+packages = ["sphere"]

@@ -27,12 +27,21 @@ JSON schema (schema_version = "1.0")
       "base_link_broken": "boolean for venvs, null for conda",
       "discovered_by": [{"source": "string"}]
     }],
-    "repositories": [],
+    "repositories": [{
+      "id": "repository:<canonical repository path>",
+      "type": "repository",
+      "path": "canonical repository path",
+      "requirements": ["serialized PEP 508 requirement declarations"]
+    }],
     "contexts": [{"id": "context:<directory>", "type": "directory-context", "path": "directory"}]
   },
   "edges": [
     {"type": "based-on", "from": "environment id", "to": "interpreter id"},
-    {"type": "resolves-to", "from": "context id", "to": "interpreter id", "command": "python|python3"}
+    {"type": "resolves-to", "from": "context id", "to": "interpreter id", "command": "python|python3"},
+    {
+      "type": "requires", "from": "repository id", "to": "environment or interpreter id",
+      "verdict": "satisfied|missing|version-mismatch", "diff": ["per-requirement verdicts"]
+    }
   ],
   "packages": [{
     "context_id": "interpreter or environment id",
@@ -64,6 +73,8 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from sphere.requirements import aggregate_verdict, diff_requirements, parse_repository_requirements
 
 
 SCHEMA_VERSION = "1.0"
@@ -723,6 +734,20 @@ def _package_record(
         return {"context_id": context_id, "python_path": _absolute(python_path), "status": "error", "packages": []}
 
 
+def _repository_node(directory: str, warnings: WarningLog) -> tuple[dict[str, Any], list[Any]]:
+    path = _canonical(directory)
+    requirements = parse_repository_requirements(path, warning_reporter=warnings.add)
+    return (
+        {
+            "id": _identifier("repository", path),
+            "type": "repository",
+            "path": path,
+            "requirements": [requirement.as_json() for requirement in requirements],
+        },
+        requirements,
+    )
+
+
 def scan_topology(
     *,
     directory: str | None = None,
@@ -762,8 +787,9 @@ def scan_topology(
     environment_nodes = environments.finalize(registry)
     context_id = _identifier("context", context_directory)
     context_node = {"id": context_id, "type": "directory-context", "path": context_directory}
+    repository_node, repository_requirements = _repository_node(context_directory, warnings)
 
-    edges: list[dict[str, str]] = []
+    edges: list[dict[str, Any]] = []
     for environment in environment_nodes:
         if environment["base_interpreter_id"]:
             edges.append({"type": "based-on", "from": environment["id"], "to": environment["base_interpreter_id"]})
@@ -778,6 +804,18 @@ def scan_topology(
             package_records.append(_package_record(interpreter["id"], interpreter["path"], warnings))
         for environment in environment_nodes:
             package_records.append(_package_record(environment["id"], environment["interpreter_path"], warnings))
+        for package_record in (package_records if repository_requirements else ()):
+            diff = diff_requirements(repository_requirements, package_record)
+            edges.append(
+                {
+                    "type": "requires",
+                    "from": repository_node["id"],
+                    "to": package_record["context_id"],
+                    "verdict": aggregate_verdict(diff["requirements"]),
+                    "package_query_status": diff["package_query_status"],
+                    "diff": diff["requirements"],
+                }
+            )
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -790,7 +828,7 @@ def scan_topology(
         "nodes": {
             "interpreters": interpreter_nodes,
             "environments": environment_nodes,
-            "repositories": [],
+            "repositories": [repository_node],
             "contexts": [context_node],
         },
         "edges": edges,

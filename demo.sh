@@ -4,7 +4,7 @@
 # Creates one sample project and two environments so the graph always has
 # something interesting to show, on any machine:
 #   demo/.venv-good    : satisfies the project's requirements   (all edges green)
-#   demo/.venv-broken  : six at the wrong version, idna missing (mismatch + missing)
+#   demo/.venv-broken  : six at the wrong version, idna/typing-extensions missing
 # The sample project itself has NO venv, so its folder resolves to the global
 # interpreter — the "I just have a folder and ran python and it broke" case.
 #
@@ -35,6 +35,7 @@ mkdir -p "$PROJECT_DIR"
 cat > "$PROJECT_DIR/requirements.txt" <<'EOF'
 six==1.16.0
 idna>=3.0
+typing-extensions>=4.0
 EOF
 
 cat > "$PROJECT_DIR/app.py" <<'EOF'
@@ -54,7 +55,7 @@ make_venv () {
 }
 
 echo "Creating demo/.venv-good   (satisfies requirements)..."
-make_venv "$DEMO_DIR/.venv-good" "six==1.16.0" "idna>=3.0"
+make_venv "$DEMO_DIR/.venv-good" "six==1.16.0" "idna>=3.0" "typing-extensions>=4.0"
 
 echo "Creating demo/.venv-broken (six wrong version, idna missing)..."
 make_venv "$DEMO_DIR/.venv-broken" "six==1.15.0"
