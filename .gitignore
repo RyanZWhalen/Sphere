@@ -216,3 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Project-local Codex context, scratch notes, and generated development artifacts.
+.codex/
