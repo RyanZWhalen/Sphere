@@ -1,28 +1,47 @@
-"""Read-only local web server for Sphere's topology graph."""
+"""Local web server for Sphere's topology graph and fix loop.
+
+The topology API is read-only.  The fix loop adds two endpoints: ``POST /api/plan``
+compiles the command-plan IR for a target (safe — it never mutates anything), and
+``POST /api/apply`` executes an approved plan, streaming a per-action receipt as it
+goes and finishing with a re-scanned topology that proves the result.
+"""
 
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import socket
+import sys
 import threading
 import webbrowser
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+from sphere.apply import default_rescan, execute_plan
+from sphere.fixplan import build_plan
 from sphere.introspect import scan_topology
+from sphere.requirements import parse_repository_requirements
 
 
-def _server_dependencies() -> tuple[Any, Any, Any]:
+def _server_dependencies() -> tuple[Any, Any, Any, Any, Any, Any]:
     try:
-        from fastapi import FastAPI, Query
+        from fastapi import Body, FastAPI, HTTPException, Query
+        from fastapi.responses import StreamingResponse
         from fastapi.staticfiles import StaticFiles
     except ModuleNotFoundError as error:
         raise RuntimeError(
             "Sphere's web server needs the optional serve dependencies. "
             "Install them with: python -m pip install '.[serve]'"
         ) from error
-    return FastAPI, Query, StaticFiles
+    return FastAPI, Query, StaticFiles, Body, HTTPException, StreamingResponse
+
+
+def _protected_prefixes() -> tuple[str, ...]:
+    """Realpath of Sphere's own environment, so the fix loop can never target it."""
+
+    return (os.path.realpath(sys.prefix),)
 
 
 def _dist_directory() -> Path:
@@ -36,7 +55,7 @@ def create_app(
 ) -> Any:
     """Create the same-origin API and prebuilt UI application."""
 
-    FastAPI, Query, StaticFiles = _server_dependencies()
+    FastAPI, Query, StaticFiles, Body, HTTPException, StreamingResponse = _server_dependencies()
     default_directory = directory
     default_search_roots = tuple(search_roots)
     dist_directory = _dist_directory()
@@ -44,6 +63,12 @@ def create_app(
         raise RuntimeError(f"prebuilt frontend is missing: {dist_directory}")
 
     app = FastAPI(title="Sphere", docs_url=None, redoc_url=None, openapi_url=None)
+
+    def _scan_args(payload: dict[str, Any]) -> tuple[str | None, list[str]]:
+        directory = payload.get("directory")
+        directory = directory if directory is not None else default_directory
+        search_roots = payload.get("search_root") or list(default_search_roots)
+        return directory, list(search_roots)
 
     @app.get("/api/topology")
     def topology(
@@ -57,7 +82,60 @@ def create_app(
             search_roots=search_root if search_root else default_search_roots,
         )
 
-    # Mount after the API route so the static SPA cannot shadow /api/topology.
+    @app.post("/api/plan")
+    def plan(payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+        """Compile (but never run) the command-plan IR for one target runtime."""
+
+        target_id = payload.get("target_id")
+        if not target_id:
+            raise HTTPException(status_code=400, detail="target_id is required")
+        scan_directory, scan_roots = _scan_args(payload)
+        scan = scan_topology(directory=scan_directory, search_roots=scan_roots)
+        repositories = scan["nodes"]["repositories"]
+        if not repositories:
+            raise HTTPException(status_code=404, detail="no repository was found for this directory")
+        try:
+            compiled = build_plan(
+                scan, repositories[0]["id"], target_id, protected_prefixes=_protected_prefixes()
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return {"plan": compiled.as_json()}
+
+    @app.post("/api/apply")
+    def apply(payload: dict[str, Any] = Body(default={})) -> Any:
+        """Execute an approved plan, streaming NDJSON receipts as each action lands."""
+
+        target_id = payload.get("target_id")
+        if not target_id:
+            raise HTTPException(status_code=400, detail="target_id is required")
+        expected_fingerprint = payload.get("fingerprint")
+        scan_directory, scan_roots = _scan_args(payload)
+        scan = scan_topology(directory=scan_directory, search_roots=scan_roots)
+        repositories = scan["nodes"]["repositories"]
+        if not repositories:
+            raise HTTPException(status_code=404, detail="no repository was found for this directory")
+        repository = repositories[0]
+        try:
+            compiled = build_plan(
+                scan, repository["id"], target_id, protected_prefixes=_protected_prefixes()
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        requirements = parse_repository_requirements(repository["path"])
+        rescan = default_rescan(scan_directory, scan_roots)
+
+        def stream() -> Iterable[str]:
+            # Refuse to run if the world changed since the user previewed this plan.
+            if expected_fingerprint and expected_fingerprint != compiled.fingerprint:
+                yield json.dumps({"event": "stale", "plan": compiled.as_json()}) + "\n"
+                return
+            for event in execute_plan(compiled, requirements, rescan=rescan):
+                yield json.dumps(event) + "\n"
+
+        return StreamingResponse(stream(), media_type="application/x-ndjson")
+
+    # Mount after the API routes so the static SPA cannot shadow /api/*.
     app.mount("/", StaticFiles(directory=str(dist_directory), html=True), name="web")
     return app
 

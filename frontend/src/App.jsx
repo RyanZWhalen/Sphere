@@ -7,6 +7,8 @@ import {
   ReactFlow,
   ReactFlowProvider,
 } from '@xyflow/react';
+import { indexRepositoryRequiresEdges } from './topology.js';
+import { commandLine, planNarrative, stepState } from './fixplan.js';
 
 const STATUS = {
   satisfied: { label: 'Satisfied', color: '#38c987' },
@@ -40,7 +42,7 @@ function displayInterpreter(node) {
 
 function RuntimeNode({ data }) {
   const accent = data.status && data.status !== 'neutral' ? STATUS[data.status].color : null;
-  const classes = ['runtime-card', `runtime-card--${data.kind}`, data.resolved ? 'is-resolved' : ''];
+  const classes = ['runtime-card', `runtime-card--${data.kind}`, data.resolved ? 'is-resolved' : '', data.pending ? 'is-pending' : ''];
   return (
     <div className={classes.join(' ')} style={accent ? { '--accent': accent } : undefined}>
       <Handle type="target" position={Position.Left} className="flow-handle" />
@@ -51,6 +53,7 @@ function RuntimeNode({ data }) {
       <div className="card-tags">
         {data.resolved && <span className="tag tag--current">Runs now</span>}
         {data.fix && <span className="tag tag--fix">The fix</span>}
+        {data.pending && <span className="tag tag--pending">Fix preview</span>}
         {data.status && data.status !== 'neutral' && <span className="tag" style={{ color: accent }}>{STATUS[data.status].label}</span>}
       </div>
       <Handle type="source" position={Position.Right} className="flow-handle" />
@@ -74,7 +77,7 @@ function OtherInterpretersNode({ data }) {
 
 const NODE_TYPES = { runtime: RuntimeNode, other: OtherInterpretersNode };
 
-function makeModel(topology, expanded, toggleOther) {
+function makeModel(topology, expanded, toggleOther, planTargetId) {
   const groups = topology.nodes || {};
   const interpreters = groups.interpreters || [];
   const environments = groups.environments || [];
@@ -90,9 +93,14 @@ function makeModel(topology, expanded, toggleOther) {
   const foregroundInterpreterIds = new Set([resolvedId, ...basedOnIds].filter(Boolean));
   const foregroundInterpreters = interpreters.filter((node) => foregroundInterpreterIds.has(node.id));
   const otherInterpreters = interpreters.filter((node) => !foregroundInterpreterIds.has(node.id));
-  const requiresByTarget = new Map();
-  rawEdges.filter((edge) => edge.type === 'requires').forEach((edge) => requiresByTarget.set(edge.to, edge));
-  const diffFor = (id) => requiresByTarget.get(id)?.diff || [];
+  // A runtime can also be the target of resolves-to and based-on edges. Only
+  // the repository-origin requires edge for this exact node owns inspector data.
+  const requiresByTarget = indexRepositoryRequiresEdges(rawEdges, repository?.id);
+  const requiresEdgeForTarget = (targetId) => {
+    const edge = requiresByTarget.get(targetId);
+    return edge?.to === targetId && edge?.from === repository?.id ? edge : null;
+  };
+  const diffFor = (id) => requiresEdgeForTarget(id)?.diff || [];
 
   const nodes = [];
   if (context) {
@@ -134,6 +142,7 @@ function makeModel(topology, expanded, toggleOther) {
         detail: shortPath(interpreter.path),
         status: worstStatus(diff),
         resolved: interpreter.id === resolvedId,
+        pending: interpreter.id === planTargetId,
       },
     });
     runtimeRow += 1;
@@ -155,6 +164,7 @@ function makeModel(topology, expanded, toggleOther) {
         detail: shortPath(environment.path),
         status: worstStatus(diff),
         fix: diff.length > 0 && worstStatus(diff) === 'satisfied',
+        pending: environment.id === planTargetId,
       },
     });
     runtimeRow += 1;
@@ -193,14 +203,104 @@ function makeModel(topology, expanded, toggleOther) {
         labelStyle: edge.type === 'requires' ? { fill: color, fontSize: 11, fontWeight: 700 } : undefined,
       };
     });
-  return { nodes, edges, byId, requiresByTarget, resolvedId, repository, context };
+  return { nodes, edges, byId, resolvedId, repository, context, requiresEdgeForTarget };
 }
 
-function DiffInspector({ selection, model }) {
+function beforeText(step) {
+  const before = step.before || {};
+  if (before.status === 'missing') return 'missing';
+  return `${before.installed_version || '—'} · ${before.status}`;
+}
+
+function afterText(receipt) {
+  if (!receipt) return 'pending';
+  if (receipt.error) return 'failed';
+  const after = receipt.after || {};
+  return after.installed_version ? `${after.installed_version} · ${after.status || 'installed'}` : 'installed';
+}
+
+const STEP_BADGE = { pending: '○', satisfied: '✓', done: '✓', error: '✕' };
+
+function FixPanel({ plan, verdict, planLoading, applying, fixError, done, receipts, onPreview, onApprove, onCancel }) {
+  const canOfferFix = verdict && verdict !== 'satisfied';
+  if (!canOfferFix && !plan) return null;
+
+  return (
+    <section className="fixpanel">
+      <div className="fixpanel__head">
+        <span className="inspector__eyebrow">Fix loop</span>
+        {plan && !applying && <button type="button" className="link-btn" onClick={onCancel}>Clear</button>}
+      </div>
+
+      {!plan && (
+        <button type="button" className="btn btn--go" disabled={planLoading} onClick={onPreview}>
+          {planLoading ? 'Building plan…' : 'Preview fix'}
+        </button>
+      )}
+
+      {fixError && <p className="fixpanel__error">{fixError}</p>}
+
+      {plan && !plan.target.writable && (
+        <div className="fixpanel__blocked">
+          <strong>Can’t fix this runtime.</strong>
+          <span>{plan.target.block_reason}</span>
+        </div>
+      )}
+
+      {plan && plan.target.writable && (
+        <>
+          <p className="fixpanel__narrative">{planNarrative(plan)}</p>
+          <ol className="steplist">
+            {plan.steps.map((step) => {
+              const receipt = receipts[step.index] || step.receipt;
+              const state = stepState({ ...step, receipt });
+              return (
+                <li className={`step step--${state}`} key={step.index}>
+                  <div className="step__head">
+                    <span className="step__action">{step.action}</span>
+                    <span className="step__pkg">{step.package}</span>
+                    <span className="step__badge">{STEP_BADGE[state] || '○'}</span>
+                  </div>
+                  <code className="step__cmd">{commandLine(step.command)}</code>
+                  <div className="step__delta">
+                    <span>{beforeText(step)}</span>
+                    <span className="step__arrow">→</span>
+                    <span>{afterText(receipt)}</span>
+                  </div>
+                  {receipt?.error && <pre className="step__err">{receipt.stderr_tail || receipt.error}</pre>}
+                </li>
+              );
+            })}
+          </ol>
+
+          {!done && (
+            <div className="fixpanel__actions">
+              <button type="button" className="btn btn--go" disabled={applying} onClick={onApprove}>
+                {applying ? 'Running…' : 'Approve & run'}
+              </button>
+              {!applying && <button type="button" className="btn btn--ghost" onClick={onCancel}>Cancel</button>}
+            </div>
+          )}
+
+          {done && plan.verdict_after != null && (
+            <div className={`fixpanel__outcome ${plan.verdict_after === 'satisfied' ? 'is-good' : 'is-bad'}`}>
+              <strong>{plan.verdict_before} → {plan.verdict_after}</strong>
+              <span>{plan.verdict_after === 'satisfied' ? 'All requirements satisfied. Graph re-scanned.' : 'Not fully resolved — see the receipts above.'}</span>
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
+function DiffInspector({ selectedTargetId, model, plan, receipts, planLoading, applying, fixError, done, onPreview, onApprove, onCancel }) {
   const resolvedInterpreter = model.byId.get(model.resolvedId);
-  const fallback = model.requiresByTarget.get(model.resolvedId);
-  const active = selection || fallback;
-  const diff = active?.diff || [];
+  const targetId = selectedTargetId || model.resolvedId;
+  const active = model.requiresEdgeForTarget(targetId);
+  // Never fall through to any edge attached to the target. installed_version
+  // is read exclusively from this exact repository -> target requires edge.
+  const diff = active?.from === model.repository?.id && active?.to === targetId ? active.diff || [] : [];
   const missing = diff.filter((item) => item.status === 'missing').length;
   const mismatch = diff.filter((item) => item.status === 'version-mismatch').length;
   const summary = diff.length
@@ -232,20 +332,126 @@ function DiffInspector({ selection, model }) {
       ) : (
         <p className="inspector__empty">Select a repository-to-runtime edge or a runtime card to inspect its package verdicts.</p>
       )}
+      <FixPanel
+        plan={plan}
+        verdict={active?.verdict}
+        planLoading={planLoading}
+        applying={applying}
+        fixError={fixError}
+        done={done}
+        receipts={receipts}
+        onPreview={onPreview}
+        onApprove={onApprove}
+        onCancel={onCancel}
+      />
     </aside>
   );
 }
 
-function Graph({ topology }) {
+function Graph({ topology, onTopologyChange }) {
   const [expanded, setExpanded] = useState(false);
-  const [selection, setSelection] = useState(null);
-  const model = useMemo(() => makeModel(topology, expanded, () => setExpanded((value) => !value)), [topology, expanded]);
+  const [selectedTargetId, setSelectedTargetId] = useState(null);
+  const [plan, setPlan] = useState(null);
+  const [receipts, setReceipts] = useState({});
+  const [planLoading, setPlanLoading] = useState(false);
+  const [applying, setApplying] = useState(false);
+  const [fixError, setFixError] = useState(null);
+  const [done, setDone] = useState(false);
+
+  const planTargetId = plan?.target?.id || null;
+  const model = useMemo(
+    () => makeModel(topology, expanded, () => setExpanded((value) => !value), planTargetId),
+    [topology, expanded, planTargetId],
+  );
+
+  const clearFix = () => {
+    setPlan(null);
+    setReceipts({});
+    setDone(false);
+    setFixError(null);
+  };
+
+  // Selecting a different runtime abandons any plan staged for the previous one.
+  const selectTarget = (id) => {
+    setSelectedTargetId(id);
+    clearFix();
+  };
+
+  const previewPlan = async () => {
+    const targetId = selectedTargetId || model.resolvedId;
+    if (!targetId) return;
+    setPlanLoading(true);
+    clearFix();
+    try {
+      const response = await fetch('/api/plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target_id: targetId }),
+      });
+      if (!response.ok) throw new Error(`Could not build a plan (${response.status})`);
+      const data = await response.json();
+      setPlan(data.plan);
+    } catch (reason) {
+      setFixError(reason.message);
+    } finally {
+      setPlanLoading(false);
+    }
+  };
+
+  const handleEvent = (event) => {
+    if (event.event === 'plan') setPlan(event.plan);
+    else if (event.event === 'receipt') setReceipts((prev) => ({ ...prev, [event.index]: event.step }));
+    else if (event.event === 'blocked') setFixError(event.reason || 'This runtime cannot be modified.');
+    else if (event.event === 'stale') {
+      setPlan(event.plan);
+      setFixError('The environment changed since preview — showing the refreshed plan. Review and run again.');
+    } else if (event.event === 'done') {
+      setPlan(event.plan);
+      setDone(true);
+      if (event.topology) onTopologyChange(event.topology);
+    }
+  };
+
+  const approveAndRun = async () => {
+    if (!plan || !plan.target.writable) return;
+    setApplying(true);
+    setFixError(null);
+    setReceipts({});
+    setDone(false);
+    try {
+      const response = await fetch('/api/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target_id: plan.target.id, fingerprint: plan.fingerprint }),
+      });
+      if (!response.ok || !response.body) throw new Error(`Apply failed (${response.status})`);
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      for (;;) {
+        const { value, done: streamDone } = await reader.read();
+        if (streamDone) break;
+        buffer += decoder.decode(value, { stream: true });
+        let newline;
+        while ((newline = buffer.indexOf('\n')) >= 0) {
+          const line = buffer.slice(0, newline).trim();
+          buffer = buffer.slice(newline + 1);
+          if (line) handleEvent(JSON.parse(line));
+        }
+      }
+    } catch (reason) {
+      setFixError(reason.message);
+    } finally {
+      setApplying(false);
+    }
+  };
+
   return (
     <div className="app-shell">
       <main className="graph-region">
         <header className="topbar">
           <div><span className="brand-dot" /> Sphere <span>Python topology</span></div>
-          <div className="topbar__meta">Read-only scan · {topology.generated_at ? 'live' : 'loading'}</div>
+          <div className="topbar__meta">{applying ? 'Applying fix…' : `Read-only scan · ${topology.generated_at ? 'live' : 'loading'}`}</div>
         </header>
         <ReactFlow
           nodes={model.nodes}
@@ -254,15 +460,32 @@ function Graph({ topology }) {
           fitView
           fitViewOptions={{ padding: 0.17 }}
           minZoom={0.35}
-          onNodeClick={(_event, node) => setSelection(model.requiresByTarget.get(node.id) || null)}
-          onEdgeClick={(_event, edge) => setSelection(edge.data?.type === 'requires' ? edge.data : null)}
+          onNodeClick={(_event, node) => selectTarget(model.requiresEdgeForTarget(node.id) ? node.id : null)}
+          onEdgeClick={(_event, edge) => {
+            const isRepositoryRequiresEdge = edge.data?.type === 'requires'
+              && edge.data?.from === model.repository?.id
+              && edge.data?.to === edge.target;
+            selectTarget(isRepositoryRequiresEdge ? edge.target : null);
+          }}
           proOptions={{ hideAttribution: true }}
         >
           <Background color="#1c2634" gap={26} size={1} />
           <Controls showInteractive={false} />
         </ReactFlow>
       </main>
-      <DiffInspector selection={selection} model={model} />
+      <DiffInspector
+        selectedTargetId={selectedTargetId}
+        model={model}
+        plan={plan}
+        receipts={receipts}
+        planLoading={planLoading}
+        applying={applying}
+        fixError={fixError}
+        done={done}
+        onPreview={previewPlan}
+        onApprove={approveAndRun}
+        onCancel={clearFix}
+      />
     </div>
   );
 }
@@ -281,5 +504,5 @@ export function App() {
   }, []);
   if (error) return <div className="loading-state"><strong>Sphere could not load the topology.</strong><span>{error}</span></div>;
   if (!topology) return <div className="loading-state"><strong>Scanning Python topology…</strong><span>Querying each interpreter in isolation.</span></div>;
-  return <ReactFlowProvider><Graph topology={topology} /></ReactFlowProvider>;
+  return <ReactFlowProvider><Graph topology={topology} onTopologyChange={setTopology} /></ReactFlowProvider>;
 }

@@ -220,6 +220,9 @@ __marimo__/
 # Project-local Codex context, scratch notes, and generated development artifacts.
 .codex/
 
+# Sphere must run from its own environment so it never pollutes scanned interpreters.
+.sphere-venv/
+
 # Frontend build dependencies are restored from frontend/package-lock.json.
 frontend/node_modules/
 
