@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from sphere.apply import default_rescan, execute_plan
-from sphere.fixplan import build_plan
+from sphere.fixplan import build_create_venv_plan, build_plan
 from sphere.introspect import scan_topology
 from sphere.requirements import parse_repository_requirements
 
@@ -70,6 +70,24 @@ def create_app(
         search_roots = payload.get("search_root") or list(default_search_roots)
         return directory, list(search_roots)
 
+    def _compile(scan: dict[str, Any], repository: dict[str, Any], payload: dict[str, Any]) -> Any:
+        """Build the right plan flavor: a create-venv plan or a target-fix plan."""
+
+        if payload.get("create_venv"):
+            return build_create_venv_plan(
+                scan,
+                repository["id"],
+                base_interpreter_id=payload.get("base_interpreter_id"),
+                protected_prefixes=_protected_prefixes(),
+            )
+        return build_plan(
+            scan, repository["id"], payload["target_id"], protected_prefixes=_protected_prefixes()
+        )
+
+    def _require_target(payload: dict[str, Any]) -> None:
+        if not payload.get("create_venv") and not payload.get("target_id"):
+            raise HTTPException(status_code=400, detail="target_id is required")
+
     @app.get("/api/topology")
     def topology(
         directory: str | None = None,
@@ -84,20 +102,16 @@ def create_app(
 
     @app.post("/api/plan")
     def plan(payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
-        """Compile (but never run) the command-plan IR for one target runtime."""
+        """Compile (but never run) the command-plan IR for a target or a new venv."""
 
-        target_id = payload.get("target_id")
-        if not target_id:
-            raise HTTPException(status_code=400, detail="target_id is required")
+        _require_target(payload)
         scan_directory, scan_roots = _scan_args(payload)
         scan = scan_topology(directory=scan_directory, search_roots=scan_roots)
         repositories = scan["nodes"]["repositories"]
         if not repositories:
             raise HTTPException(status_code=404, detail="no repository was found for this directory")
         try:
-            compiled = build_plan(
-                scan, repositories[0]["id"], target_id, protected_prefixes=_protected_prefixes()
-            )
+            compiled = _compile(scan, repositories[0], payload)
         except ValueError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         return {"plan": compiled.as_json()}
@@ -106,9 +120,7 @@ def create_app(
     def apply(payload: dict[str, Any] = Body(default={})) -> Any:
         """Execute an approved plan, streaming NDJSON receipts as each action lands."""
 
-        target_id = payload.get("target_id")
-        if not target_id:
-            raise HTTPException(status_code=400, detail="target_id is required")
+        _require_target(payload)
         expected_fingerprint = payload.get("fingerprint")
         scan_directory, scan_roots = _scan_args(payload)
         scan = scan_topology(directory=scan_directory, search_roots=scan_roots)
@@ -117,9 +129,7 @@ def create_app(
             raise HTTPException(status_code=404, detail="no repository was found for this directory")
         repository = repositories[0]
         try:
-            compiled = build_plan(
-                scan, repository["id"], target_id, protected_prefixes=_protected_prefixes()
-            )
+            compiled = _compile(scan, repository, payload)
         except ValueError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         requirements = parse_repository_requirements(repository["path"])

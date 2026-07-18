@@ -18,6 +18,7 @@ loop stops rather than pretending the fix landed.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import time
 from collections.abc import Callable, Iterable, Iterator, Sequence
@@ -162,11 +163,15 @@ def execute_plan(
             "status": None,
         }
         if outcome.get("exit_status") == 0:
-            diff = diff_requirements(requirements, package_query(plan.target.id, interpreter_path))
-            match = _match_requirement(diff, step.package)
-            if match is not None:
-                after["installed_version"] = match.get("installed_version")
-                after["status"] = match.get("status")
+            if step.action == "create-venv":
+                # Creating an env has no package verdict; prove the interpreter now exists.
+                after["status"] = "created" if (interpreter_path and os.path.exists(interpreter_path)) else "failed"
+            else:
+                diff = diff_requirements(requirements, package_query(plan.target.id, interpreter_path))
+                match = _match_requirement(diff, step.package)
+                if match is not None:
+                    after["installed_version"] = match.get("installed_version")
+                    after["status"] = match.get("status")
         step.receipt = {
             "command": list(step.command),
             "exit_status": outcome.get("exit_status"),

@@ -82,6 +82,10 @@ def _canonical(path: str) -> str:
     return os.path.realpath(os.path.abspath(os.path.expanduser(path)))
 
 
+def _is_probably_executable(path: str | None) -> bool:
+    return bool(path) and os.path.isfile(path) and os.access(path, os.X_OK)
+
+
 @dataclass
 class Step:
     """One package operation: exactly one exact command with one before/after."""
@@ -340,6 +344,106 @@ def build_plan(
             block_reason=block_reason,
         ),
         verdict_before=verdict_before,
+        steps=steps,
+        fingerprint=fingerprint,
+    )
+
+
+def _resolved_interpreter_id(topology: Mapping[str, Any]) -> str | None:
+    for edge in topology.get("edges", []) or []:
+        if edge.get("type") == "resolves-to":
+            return edge.get("to")
+    return None
+
+
+def build_create_venv_plan(
+    topology: Mapping[str, Any],
+    repository_id: str,
+    *,
+    base_interpreter_id: str | None = None,
+    venv_dirname: str = ".venv",
+    producer: str = "diff-compiler",
+    protected_prefixes: Sequence[str] | None = None,
+    generated_at: str | None = None,
+) -> Plan:
+    """Compile a plan that creates a fresh venv for a folder, then fills it.
+
+    This is the honest resolution for the "folder resolves to a shared interpreter"
+    case (the documented ``create-venv`` action the IR already permits): instead of
+    polluting that interpreter, create a project-local venv *from* it and install the
+    declared requirements into the new environment. Step 0 is a ``create-venv`` action
+    whose command is ``<base> -m venv <folder>/.venv``; the remaining steps are
+    ordinary installs targeting the interpreter that step will create.
+    """
+
+    if protected_prefixes is None:
+        protected_prefixes = (_canonical(sys.prefix),)
+    else:
+        protected_prefixes = tuple(_canonical(prefix) for prefix in protected_prefixes)
+
+    repository_node, _ = _find_node(topology, repository_id)
+    if repository_node is None:
+        raise ValueError(f"unknown repository: {repository_id!r}")
+    folder = repository_node.get("path") or ""
+    venv_path = _canonical(os.path.join(folder, venv_dirname))
+    venv_python = os.path.join(venv_path, "bin", "python")
+
+    base_id = base_interpreter_id or _resolved_interpreter_id(topology)
+    base_node, _ = _find_node(topology, base_id) if base_id else (None, None)
+    base_path = base_node.get("path") if base_node else None
+
+    writable, block_reason = True, None
+    if not _is_probably_executable(base_path):
+        writable, block_reason = False, "No base interpreter is available to create a virtual environment."
+    else:
+        canonical_python = _canonical(venv_python)
+        for prefix in protected_prefixes:
+            if canonical_python == prefix or canonical_python.startswith(prefix + os.sep):
+                writable, block_reason = False, "This is Sphere's own environment; refusing to modify the tool's runtime."
+
+    steps: list[Step] = [
+        Step(
+            index=0,
+            action="create-venv",
+            package=venv_dirname,
+            specifier="",
+            requirement=f"venv @ {venv_path}",
+            source="sphere:create-venv",
+            command=[base_path or "python", "-m", "venv", venv_path],
+            before={"status": "absent", "installed_version": None},
+            expected_after_status="created",
+        )
+    ]
+    for item in repository_node.get("requirements", []) or []:
+        argument = _pip_argument(item)
+        steps.append(
+            Step(
+                index=len(steps),
+                action="install",
+                package=canonicalize_name(item.get("name") or ""),
+                specifier=item.get("specifier") or "",
+                requirement=item.get("requirement") or argument,
+                source=item.get("source") or "",
+                command=[venv_python, "-m", "pip", "install", argument],
+                before={"status": "missing", "installed_version": None},
+            )
+        )
+
+    fingerprint = _fingerprint(venv_python, steps)
+    return Plan(
+        id=f"plan:{fingerprint[:12]}",
+        producer=producer,
+        generated_at=generated_at or datetime.now(UTC).isoformat(),
+        repository={"id": repository_node["id"], "path": folder},
+        target=PlanTarget(
+            id=f"environment:{venv_path}",
+            type="environment",
+            kind="venv",
+            interpreter_path=venv_python,
+            writable=writable,
+            block_reason=block_reason,
+        ),
+        verdict_before="missing",
         steps=steps,
         fingerprint=fingerprint,
     )

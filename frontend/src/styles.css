@@ -72,6 +72,7 @@ button { font: inherit; }
 .fixpanel__blocked { display: grid; gap: 4px; margin-top: 12px; padding: 11px 12px; border: 1px solid #3a2b30; border-radius: 8px; background: rgba(240,111,112,.06); }
 .fixpanel__blocked strong { color: #f0b6b6; font-size: 12px; }
 .fixpanel__blocked span { color: #b79aa0; font-size: 11.5px; line-height: 1.5; }
+.fixpanel__createvenv { justify-self: start; margin-top: 6px; }
 .fixpanel__narrative { margin: 4px 0 14px; color: #b6c1cf; font-size: 12.5px; line-height: 1.5; }
 
 .steplist { display: grid; gap: 9px; margin: 0; padding: 0; list-style: none; }

@@ -216,12 +216,13 @@ function afterText(receipt) {
   if (!receipt) return 'pending';
   if (receipt.error) return 'failed';
   const after = receipt.after || {};
-  return after.installed_version ? `${after.installed_version} · ${after.status || 'installed'}` : 'installed';
+  if (after.installed_version) return `${after.installed_version} · ${after.status || 'installed'}`;
+  return after.status || 'installed';
 }
 
 const STEP_BADGE = { pending: '○', satisfied: '✓', done: '✓', error: '✕' };
 
-function FixPanel({ plan, verdict, planLoading, applying, fixError, done, receipts, onPreview, onApprove, onCancel }) {
+function FixPanel({ plan, verdict, planLoading, applying, fixError, done, receipts, onPreview, onApprove, onCancel, onCreateVenv }) {
   const canOfferFix = verdict && verdict !== 'satisfied';
   if (!canOfferFix && !plan) return null;
 
@@ -244,6 +245,9 @@ function FixPanel({ plan, verdict, planLoading, applying, fixError, done, receip
         <div className="fixpanel__blocked">
           <strong>Can’t fix this runtime.</strong>
           <span>{plan.target.block_reason}</span>
+          {plan.target.type === 'interpreter' && (
+            <button type="button" className="btn btn--go fixpanel__createvenv" onClick={onCreateVenv}>Create a venv for this folder</button>
+          )}
         </div>
       )}
 
@@ -294,7 +298,7 @@ function FixPanel({ plan, verdict, planLoading, applying, fixError, done, receip
   );
 }
 
-function DiffInspector({ selectedTargetId, model, plan, receipts, planLoading, applying, fixError, done, onPreview, onApprove, onCancel }) {
+function DiffInspector({ selectedTargetId, model, plan, receipts, planLoading, applying, fixError, done, onPreview, onApprove, onCancel, onCreateVenv }) {
   const resolvedInterpreter = model.byId.get(model.resolvedId);
   const targetId = selectedTargetId || model.resolvedId;
   const active = model.requiresEdgeForTarget(targetId);
@@ -343,6 +347,7 @@ function DiffInspector({ selectedTargetId, model, plan, receipts, planLoading, a
         onPreview={onPreview}
         onApprove={onApprove}
         onCancel={onCancel}
+        onCreateVenv={onCreateVenv}
       />
     </aside>
   );
@@ -357,6 +362,7 @@ function Graph({ topology, onTopologyChange }) {
   const [applying, setApplying] = useState(false);
   const [fixError, setFixError] = useState(null);
   const [done, setDone] = useState(false);
+  const [planRequest, setPlanRequest] = useState(null);
 
   const planTargetId = plan?.target?.id || null;
   const model = useMemo(
@@ -369,6 +375,7 @@ function Graph({ topology, onTopologyChange }) {
     setReceipts({});
     setDone(false);
     setFixError(null);
+    setPlanRequest(null);
   };
 
   // Selecting a different runtime abandons any plan staged for the previous one.
@@ -377,16 +384,15 @@ function Graph({ topology, onTopologyChange }) {
     clearFix();
   };
 
-  const previewPlan = async () => {
-    const targetId = selectedTargetId || model.resolvedId;
-    if (!targetId) return;
+  const requestPlan = async (request) => {
     setPlanLoading(true);
     clearFix();
+    setPlanRequest(request);
     try {
       const response = await fetch('/api/plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target_id: targetId }),
+        body: JSON.stringify(request),
       });
       if (!response.ok) throw new Error(`Could not build a plan (${response.status})`);
       const data = await response.json();
@@ -398,9 +404,16 @@ function Graph({ topology, onTopologyChange }) {
     }
   };
 
+  const previewPlan = () => {
+    const targetId = selectedTargetId || model.resolvedId;
+    if (targetId) requestPlan({ target_id: targetId });
+  };
+
+  const previewCreateVenv = () => requestPlan({ create_venv: true });
+
   const handleEvent = (event) => {
     if (event.event === 'plan') setPlan(event.plan);
-    else if (event.event === 'receipt') setReceipts((prev) => ({ ...prev, [event.index]: event.step }));
+    else if (event.event === 'receipt') setReceipts((prev) => ({ ...prev, [event.index]: event.step.receipt }));
     else if (event.event === 'blocked') setFixError(event.reason || 'This runtime cannot be modified.');
     else if (event.event === 'stale') {
       setPlan(event.plan);
@@ -422,7 +435,7 @@ function Graph({ topology, onTopologyChange }) {
       const response = await fetch('/api/apply', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target_id: plan.target.id, fingerprint: plan.fingerprint }),
+        body: JSON.stringify({ ...(planRequest || { target_id: plan.target.id }), fingerprint: plan.fingerprint }),
       });
       if (!response.ok || !response.body) throw new Error(`Apply failed (${response.status})`);
       const reader = response.body.getReader();
@@ -485,6 +498,7 @@ function Graph({ topology, onTopologyChange }) {
         onPreview={previewPlan}
         onApprove={approveAndRun}
         onCancel={clearFix}
+        onCreateVenv={previewCreateVenv}
       />
     </div>
   );

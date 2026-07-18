@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import sys
 import unittest
 
-from sphere.fixplan import build_plan
+from sphere.fixplan import build_create_venv_plan, build_plan
 
 
 REPOSITORY_ID = "repository:/proj"
@@ -114,6 +115,51 @@ class BuildPlanTest(unittest.TestCase):
         diff = [_diff_item("six", "==1.16.0", "missing", None)]
         with self.assertRaises(ValueError):
             build_plan(_topology(diff), REPOSITORY_ID, "environment:/nope", protected_prefixes=["/nowhere"])
+
+
+def _create_venv_topology():
+    def requirement(name, specifier):
+        return {
+            "name": name, "requirement": f"{name}{specifier}", "specifier": specifier,
+            "extras": [], "marker": None, "url": None, "source": "requirements.txt", "raw": f"{name}{specifier}",
+        }
+
+    return {
+        "nodes": {
+            "repositories": [{
+                "id": REPOSITORY_ID, "type": "repository", "path": "/proj",
+                "requirements": [requirement("six", "==1.16.0"), requirement("idna", ">=3.0")],
+            }],
+            "environments": [],
+            "interpreters": [{
+                "id": "interpreter:base", "type": "interpreter", "path": sys.executable,
+                "discovered_by": [{"source": "system-location"}],
+            }],
+            "contexts": [{"id": "context:/proj", "type": "directory-context", "path": "/proj"}],
+        },
+        "edges": [{"type": "resolves-to", "from": "context:/proj", "to": "interpreter:base", "command": "python"}],
+    }
+
+
+class BuildCreateVenvPlanTest(unittest.TestCase):
+    def test_plan_creates_a_venv_then_installs_into_it(self):
+        plan = build_create_venv_plan(_create_venv_topology(), REPOSITORY_ID, protected_prefixes=["/nowhere"])
+        self.assertTrue(plan.target.writable)
+        self.assertEqual(plan.target.type, "environment")
+        self.assertEqual(plan.target.kind, "venv")
+        self.assertTrue(plan.target.id.endswith("/.venv"))
+        self.assertEqual([s.action for s in plan.steps], ["create-venv", "install", "install"])
+        # Step 0 builds the venv from the folder's resolved base interpreter.
+        self.assertEqual(plan.steps[0].command[:3], [sys.executable, "-m", "venv"])
+        self.assertTrue(plan.steps[0].command[3].endswith("/.venv"))
+        # Install steps target the venv's OWN (not-yet-existent) interpreter.
+        self.assertEqual(plan.steps[1].command[0], plan.target.interpreter_path)
+        self.assertIn("six==1.16.0", plan.steps[1].command)
+
+    def test_plan_blocked_when_new_venv_would_be_inside_sphere(self):
+        plan = build_create_venv_plan(_create_venv_topology(), REPOSITORY_ID, protected_prefixes=["/proj/.venv"])
+        self.assertFalse(plan.target.writable)
+        self.assertIn("Sphere's own environment", plan.target.block_reason)
 
 
 if __name__ == "__main__":
