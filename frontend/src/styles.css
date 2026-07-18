@@ -96,3 +96,46 @@ button { font: inherit; }
 .fixpanel__outcome span { font-size: 11px; }
 .fixpanel__outcome.is-good { border: 1px solid #2f6f52; background: rgba(56,201,135,.08); color: #7fe6b4; }
 .fixpanel__outcome.is-bad { border: 1px solid #6f4b2f; background: rgba(242,184,75,.08); color: #e6c78a; }
+
+/* --- spherical runtime tokens ------------------------------------------- */
+/* Interpreters and environments render as circular tokens ringed in their status
+   color. Folder and repository stay cards: they carry paths and counts that do not
+   survive a circular measure. Must follow the .is-resolved / .is-pending rules
+   above — same specificity, so source order decides which box-shadow wins. */
+.runtime-card--interpreter,
+.runtime-card--environment {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  width: 182px; height: 182px; min-height: 0; padding: 16px 19px;
+  border: 1px solid #1e2a3a; border-left: 1px solid #1e2a3a; border-radius: 50%;
+  background: radial-gradient(circle at 50% 32%, #18222f 0%, #111925 60%, #0c1119 100%);
+  box-shadow: 0 0 0 2px var(--accent, #4a586b), 0 0 30px -5px var(--accent, #4a586b), 0 14px 34px rgba(0,0,0,.42);
+  text-align: center;
+}
+/* The path is the one field a circle cannot hold; the inspector already shows it. */
+.runtime-card--interpreter .card-detail,
+.runtime-card--environment .card-detail { display: none; }
+.runtime-card--interpreter .card-kicker,
+.runtime-card--environment .card-kicker { font-size: 9px; letter-spacing: .07em; }
+.runtime-card--interpreter .card-title,
+.runtime-card--environment .card-title { max-width: 100%; margin-top: 5px; font-size: 14px; }
+.runtime-card--interpreter .card-version,
+.runtime-card--environment .card-version { max-width: 100%; overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.runtime-card--interpreter .card-tags,
+.runtime-card--environment .card-tags { flex-wrap: wrap; gap: 4px 8px; justify-content: center; margin-top: 9px; }
+.runtime-card--interpreter .tag,
+.runtime-card--environment .tag { font-size: 9px; }
+
+.runtime-card--interpreter.is-resolved,
+.runtime-card--environment.is-resolved {
+  box-shadow: 0 0 0 2px var(--accent, #4a586b), 0 0 0 6px rgba(237,242,247,.13),
+              0 0 34px -4px var(--accent, #4a586b), 0 14px 34px rgba(0,0,0,.42);
+}
+.runtime-card--interpreter.is-pending,
+.runtime-card--environment.is-pending {
+  box-shadow: 0 0 0 2px #38c987, 0 0 0 7px rgba(56,201,135,.2),
+              0 0 36px -4px #38c987, 0 14px 34px rgba(0,0,0,.42);
+}
+
+/* Handles sit on the circle's widest point, so keep them visually weightless. */
+.runtime-card--interpreter .flow-handle,
+.runtime-card--environment .flow-handle { border-color: transparent; background: transparent; }

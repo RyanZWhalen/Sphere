@@ -19,6 +19,12 @@ const STATUS = {
 
 const SEVERITY = { satisfied: 0, 'version-mismatch': 1, missing: 2, neutral: -1 };
 
+// Layout constants for the candidate-runtime column and its outward arc.
+const RUNTIME_COLUMN = 472;
+const BASE_COLUMN = 796;
+const RUNTIME_ROW = 190;
+const RUNTIME_ARC = 84;
+
 function basename(path = '') {
   return path.split('/').filter(Boolean).pop() || path;
 }
@@ -127,13 +133,26 @@ function makeModel(topology, expanded, toggleOther, planTargetId) {
     });
   }
 
+  // Candidate runtimes bow outward from the repository along a soft arc: the row
+  // level with the repository sits furthest right, the outer rows curve back in,
+  // so the column reads as radiating from a center instead of a rigid stack.
+  const resolvedInterpreter = foregroundInterpreters.find((node) => node.id === resolvedId);
+  const runtimeRowCount = (resolvedInterpreter ? 1 : 0) + environments.length;
+  const arcOffset = (row) =>
+    runtimeRowCount < 2
+      ? 0
+      : Math.round(Math.sin((row / (runtimeRowCount - 1)) * Math.PI) * RUNTIME_ARC);
+
   let runtimeRow = 0;
-  const addInterpreter = (interpreter, column = 472) => {
+  const addInterpreter = (interpreter, column = RUNTIME_COLUMN) => {
     const diff = diffFor(interpreter.id);
     nodes.push({
       id: interpreter.id,
       type: 'runtime',
-      position: { x: column, y: 90 + runtimeRow * 178 },
+      position: {
+        x: column + (column === RUNTIME_COLUMN ? arcOffset(runtimeRow) : 0),
+        y: 90 + runtimeRow * RUNTIME_ROW,
+      },
       data: {
         kind: 'interpreter',
         kicker: 'Interpreter',
@@ -148,14 +167,13 @@ function makeModel(topology, expanded, toggleOther, planTargetId) {
     runtimeRow += 1;
   };
 
-  const resolvedInterpreter = foregroundInterpreters.find((node) => node.id === resolvedId);
   if (resolvedInterpreter) addInterpreter(resolvedInterpreter);
   environments.forEach((environment) => {
     const diff = diffFor(environment.id);
     nodes.push({
       id: environment.id,
       type: 'runtime',
-      position: { x: 472, y: 90 + runtimeRow * 178 },
+      position: { x: RUNTIME_COLUMN + arcOffset(runtimeRow), y: 90 + runtimeRow * RUNTIME_ROW },
       data: {
         kind: 'environment',
         kicker: environment.kind === 'uv-project' ? 'uv environment' : `${environment.kind} environment`,
@@ -169,13 +187,13 @@ function makeModel(topology, expanded, toggleOther, planTargetId) {
     });
     runtimeRow += 1;
   });
-  foregroundInterpreters.filter((node) => node.id !== resolvedId).forEach((interpreter) => addInterpreter(interpreter, 796));
+  foregroundInterpreters.filter((node) => node.id !== resolvedId).forEach((interpreter) => addInterpreter(interpreter, BASE_COLUMN));
 
   if (otherInterpreters.length) {
     nodes.push({
       id: 'other-interpreters',
       type: 'other',
-      position: { x: 796, y: Math.max(90, 90 + runtimeRow * 178) },
+      position: { x: BASE_COLUMN, y: Math.max(90, 90 + runtimeRow * RUNTIME_ROW) },
       data: { items: otherInterpreters, expanded, onToggle: toggleOther },
     });
   }
@@ -191,7 +209,7 @@ function makeModel(topology, expanded, toggleOther, planTargetId) {
         id: `${edge.type}:${edge.from}:${edge.to}`,
         source: edge.from,
         target: edge.to,
-        type: 'smoothstep',
+        type: 'default',
         animated: edge.type === 'resolves-to',
         label: edge.type === 'requires' ? STATUS[edge.verdict || 'neutral'].label : undefined,
         data: edge,
