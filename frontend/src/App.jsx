@@ -6,6 +6,7 @@ import {
   Position,
   ReactFlow,
   ReactFlowProvider,
+  useNodesState,
 } from '@xyflow/react';
 import { indexRepositoryRequiresEdges } from './topology.js';
 import { commandLine, planNarrative, stepState } from './fixplan.js';
@@ -149,6 +150,8 @@ function makeModel(topology, expanded, toggleOther, planTargetId) {
     nodes.push({
       id: interpreter.id,
       type: 'runtime',
+      className: 'runtime-node--draggable',
+      draggable: true,
       position: {
         x: column + (column === RUNTIME_COLUMN ? arcOffset(runtimeRow) : 0),
         y: 90 + runtimeRow * RUNTIME_ROW,
@@ -173,6 +176,8 @@ function makeModel(topology, expanded, toggleOther, planTargetId) {
     nodes.push({
       id: environment.id,
       type: 'runtime',
+      className: 'runtime-node--draggable',
+      draggable: true,
       position: { x: RUNTIME_COLUMN + arcOffset(runtimeRow), y: 90 + runtimeRow * RUNTIME_ROW },
       data: {
         kind: 'environment',
@@ -387,6 +392,21 @@ function Graph({ topology, onTopologyChange }) {
     () => makeModel(topology, expanded, () => setExpanded((value) => !value), planTargetId),
     [topology, expanded, planTargetId],
   );
+  const [flowNodes, setFlowNodes, onNodesChange] = useNodesState(model.nodes);
+
+  // The arc is the deterministic initial layout, but it is not a constraint. Keep
+  // positions a user has moved while refreshing node data after selections, plan
+  // previews, group expansion, or a post-fix topology re-scan. Nodes discovered
+  // for the first time start at the model's normal deterministic position.
+  useEffect(() => {
+    setFlowNodes((currentNodes) => {
+      const currentById = new Map(currentNodes.map((node) => [node.id, node]));
+      return model.nodes.map((node) => ({
+        ...node,
+        position: currentById.get(node.id)?.position || node.position,
+      }));
+    });
+  }, [model.nodes, setFlowNodes]);
 
   const clearFix = () => {
     setPlan(null);
@@ -485,9 +505,11 @@ function Graph({ topology, onTopologyChange }) {
           <div className="topbar__meta">{applying ? 'Applying fix…' : `Read-only scan · ${topology.generated_at ? 'live' : 'loading'}`}</div>
         </header>
         <ReactFlow
-          nodes={model.nodes}
+          nodes={flowNodes}
           edges={model.edges}
           nodeTypes={NODE_TYPES}
+          nodesDraggable
+          onNodesChange={onNodesChange}
           fitView
           fitViewOptions={{ padding: 0.17 }}
           minZoom={0.35}

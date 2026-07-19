@@ -111,6 +111,8 @@ button { font: inherit; }
   box-shadow: 0 0 0 2px var(--accent, #4a586b), 0 0 30px -5px var(--accent, #4a586b), 0 14px 34px rgba(0,0,0,.42);
   text-align: center;
 }
+.react-flow__node.runtime-node--draggable { cursor: grab; }
+.react-flow__node.runtime-node--draggable.dragging { cursor: grabbing; }
 /* The path is the one field a circle cannot hold; the inspector already shows it. */
 .runtime-card--interpreter .card-detail,
 .runtime-card--environment .card-detail { display: none; }
