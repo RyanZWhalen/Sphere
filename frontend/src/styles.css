@@ -52,6 +52,18 @@ button { font: inherit; }
 .react-flow__controls { overflow: hidden; border: 1px solid #2d3a4b !important; border-radius: 8px !important; box-shadow: none !important; }.react-flow__controls-button { border-bottom-color: #2d3a4b !important; background: #151f2a !important; fill: #aeb9c7 !important; }.react-flow__edge-textbg { fill: #0f1620; }
 .loading-state { display: grid; place-content: center; gap: 8px; width: 100%; height: 100%; background: #0b1017; color: #eef3f8; text-align: center; }.loading-state span { color: #8997a8; font-size: 13px; }
 
+/* --- local diagnosis ---------------------------------------------------- */
+.diagnosis { margin-top: 22px; padding-top: 18px; border-top: 1px solid #263243; }
+.diagnosis__head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.diagnosis__mode { color: #637286; font-size: 9px; font-weight: 700; letter-spacing: .055em; text-transform: uppercase; }
+.diagnosis h3 { margin: 10px 0 6px; color: #eaf0f7; font-size: 14px; line-height: 1.35; }
+.diagnosis__summary, .diagnosis__loading, .diagnosis__error { margin: 0; color: #aeb9c7; font-size: 11.5px; line-height: 1.55; }
+.diagnosis__loading { color: #77869a; }
+.diagnosis__error { color: #d89595; }
+.diagnosis__issues { display: grid; gap: 8px; margin: 12px 0 0; padding: 0; list-style: none; }
+.diagnosis__issues li { display: grid; grid-template-columns: 7px 1fr; align-items: start; gap: 8px; color: #8f9daf; font-size: 10.5px; line-height: 1.45; }
+.diagnosis__issues i { width: 6px; height: 6px; margin-top: 4px; border-radius: 50%; }
+
 /* --- fix loop ----------------------------------------------------------- */
 .runtime-card.is-pending { box-shadow: 0 0 0 1px rgba(56,201,135,.55), 0 14px 34px rgba(0,0,0,.3); }
 .tag--pending { color: #38c987; }

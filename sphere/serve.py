@@ -1,9 +1,9 @@
-"""Local web server for Sphere's topology graph and fix loop.
+"""Local web server for Sphere's topology graph, diagnosis, and fix loop.
 
-The topology API is read-only.  The fix loop adds two endpoints: ``POST /api/plan``
-compiles the command-plan IR for a target (safe — it never mutates anything), and
-``POST /api/apply`` executes an approved plan, streaming a per-action receipt as it
-goes and finishing with a re-scanned topology that proves the result.
+The topology and local diagnosis APIs are read-only.  ``POST /api/plan`` compiles the
+command-plan IR for a target (also read-only), and ``POST /api/apply`` executes an
+approved plan, streaming a per-action receipt as it goes and finishing with a
+re-scanned topology that proves the result.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from sphere.apply import default_rescan, execute_plan
+from sphere.diagnose import build_diagnosis
 from sphere.fixplan import build_create_venv_plan, build_plan
 from sphere.introspect import scan_topology
 from sphere.requirements import parse_repository_requirements
@@ -99,6 +100,29 @@ def create_app(
             directory=directory if directory is not None else default_directory,
             search_roots=search_root if search_root else default_search_roots,
         )
+
+    @app.post("/api/diagnose")
+    def diagnose(payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+        """Explain one exact repository→target edge using deterministic local rules."""
+
+        target_id = payload.get("target_id")
+        if not target_id:
+            raise HTTPException(status_code=400, detail="target_id is required")
+        scan_directory, scan_roots = _scan_args(payload)
+        scan = scan_topology(directory=scan_directory, search_roots=scan_roots)
+        repositories = scan["nodes"]["repositories"]
+        if not repositories:
+            raise HTTPException(status_code=404, detail="no repository was found for this directory")
+        try:
+            diagnosis = build_diagnosis(
+                scan,
+                repositories[0]["id"],
+                target_id,
+                protected_prefixes=_protected_prefixes(),
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        return {"diagnosis": diagnosis}
 
     @app.post("/api/plan")
     def plan(payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:

@@ -245,6 +245,36 @@ function afterText(receipt) {
 
 const STEP_BADGE = { pending: '○', satisfied: '✓', done: '✓', error: '✕' };
 
+function DiagnosisPanel({ diagnosis, loading, error }) {
+  const problems = (diagnosis?.observations || []).filter((item) => item.status !== 'satisfied');
+  return (
+    <section className="diagnosis" aria-live="polite">
+      <div className="diagnosis__head">
+        <span className="inspector__eyebrow">Local diagnosis</span>
+        <span className="diagnosis__mode">Deterministic · on-device</span>
+      </div>
+      {loading && <p className="diagnosis__loading">Reading this target’s package verdict…</p>}
+      {error && <p className="diagnosis__error">Local diagnosis unavailable: {error}</p>}
+      {!loading && !error && diagnosis && (
+        <>
+          <h3>{diagnosis.headline}</h3>
+          <p className="diagnosis__summary">{diagnosis.summary}</p>
+          {problems.length > 0 && (
+            <ul className="diagnosis__issues">
+              {problems.map((item) => (
+                <li key={`${item.source}:${item.requirement}`}>
+                  <i style={{ background: STATUS[item.status]?.color || STATUS.neutral.color }} />
+                  <span>{item.explanation}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
 function FixPanel({ plan, verdict, planLoading, applying, fixError, done, receipts, onPreview, onApprove, onCancel, onCreateVenv }) {
   const canOfferFix = verdict && verdict !== 'satisfied';
   if (!canOfferFix && !plan) return null;
@@ -252,7 +282,7 @@ function FixPanel({ plan, verdict, planLoading, applying, fixError, done, receip
   return (
     <section className="fixpanel">
       <div className="fixpanel__head">
-        <span className="inspector__eyebrow">Fix loop</span>
+        <span className="inspector__eyebrow">Local repair agent</span>
         {plan && !applying && <button type="button" className="link-btn" onClick={onCancel}>Clear</button>}
       </div>
 
@@ -321,7 +351,7 @@ function FixPanel({ plan, verdict, planLoading, applying, fixError, done, receip
   );
 }
 
-function DiffInspector({ selectedTargetId, model, plan, receipts, planLoading, applying, fixError, done, onPreview, onApprove, onCancel, onCreateVenv }) {
+function DiffInspector({ selectedTargetId, model, diagnosis, diagnosisLoading, diagnosisError, plan, receipts, planLoading, applying, fixError, done, onPreview, onApprove, onCancel, onCreateVenv }) {
   const resolvedInterpreter = model.byId.get(model.resolvedId);
   const targetId = selectedTargetId || model.resolvedId;
   const active = model.requiresEdgeForTarget(targetId);
@@ -359,6 +389,7 @@ function DiffInspector({ selectedTargetId, model, plan, receipts, planLoading, a
       ) : (
         <p className="inspector__empty">Select a repository-to-runtime edge or a runtime card to inspect its package verdicts.</p>
       )}
+      <DiagnosisPanel diagnosis={diagnosis} loading={diagnosisLoading} error={diagnosisError} />
       <FixPanel
         plan={plan}
         verdict={active?.verdict}
@@ -386,6 +417,9 @@ function Graph({ topology, onTopologyChange }) {
   const [fixError, setFixError] = useState(null);
   const [done, setDone] = useState(false);
   const [planRequest, setPlanRequest] = useState(null);
+  const [diagnosis, setDiagnosis] = useState(null);
+  const [diagnosisLoading, setDiagnosisLoading] = useState(false);
+  const [diagnosisError, setDiagnosisError] = useState(null);
 
   const planTargetId = plan?.target?.id || null;
   const model = useMemo(
@@ -401,12 +435,45 @@ function Graph({ topology, onTopologyChange }) {
   useEffect(() => {
     setFlowNodes((currentNodes) => {
       const currentById = new Map(currentNodes.map((node) => [node.id, node]));
-      return model.nodes.map((node) => ({
-        ...node,
-        position: currentById.get(node.id)?.position || node.position,
-      }));
+      return model.nodes.map((node) => {
+        const current = currentById.get(node.id);
+        return current
+          ? { ...current, ...node, position: current.position }
+          : node;
+      });
     });
   }, [model.nodes, setFlowNodes]);
+
+  const activeTargetId = selectedTargetId || model.resolvedId;
+  useEffect(() => {
+    if (!activeTargetId) {
+      setDiagnosis(null);
+      setDiagnosisError(null);
+      return undefined;
+    }
+    const controller = new AbortController();
+    setDiagnosis(null);
+    setDiagnosisError(null);
+    setDiagnosisLoading(true);
+    fetch('/api/diagnose', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target_id: activeTargetId }),
+      signal: controller.signal,
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error(`diagnosis request failed (${response.status})`);
+        return response.json();
+      })
+      .then((payload) => setDiagnosis(payload.diagnosis))
+      .catch((reason) => {
+        if (reason.name !== 'AbortError') setDiagnosisError(reason.message);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setDiagnosisLoading(false);
+      });
+    return () => controller.abort();
+  }, [activeTargetId, topology.generated_at]);
 
   const clearFix = () => {
     setPlan(null);
@@ -502,7 +569,7 @@ function Graph({ topology, onTopologyChange }) {
       <main className="graph-region">
         <header className="topbar">
           <div><span className="brand-dot" /> Sphere <span>Python topology</span></div>
-          <div className="topbar__meta">{applying ? 'Applying fix…' : `Read-only scan · ${topology.generated_at ? 'live' : 'loading'}`}</div>
+          <div className="topbar__meta">{applying ? 'Applying fix…' : `Local agent · ${topology.generated_at ? 'live scan' : 'loading'}`}</div>
         </header>
         <ReactFlow
           nodes={flowNodes}
@@ -529,6 +596,9 @@ function Graph({ topology, onTopologyChange }) {
       <DiffInspector
         selectedTargetId={selectedTargetId}
         model={model}
+        diagnosis={diagnosis}
+        diagnosisLoading={diagnosisLoading}
+        diagnosisError={diagnosisError}
         plan={plan}
         receipts={receipts}
         planLoading={planLoading}
