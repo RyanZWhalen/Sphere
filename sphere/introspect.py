@@ -40,14 +40,27 @@ JSON schema (schema_version = "1.0")
     {"type": "resolves-to", "from": "context id", "to": "interpreter id", "command": "python|python3"},
     {
       "type": "requires", "from": "repository id", "to": "environment or interpreter id",
-      "verdict": "satisfied|missing|version-mismatch", "diff": ["per-requirement verdicts"]
+      "verdict": "satisfied|missing|version-mismatch",
+      "evidence": {
+        "available": "boolean",
+        "python_path": "absolute executable path or null",
+        "command": ["exact subprocess argv"] | null,
+        "raw_stdout": "verbatim distribution-list JSON or null",
+        "reason": "why evidence is unavailable or null"
+      },
+      "diff": [{
+        "name": "distribution name", "specifier": "PEP 440 specifier",
+        "status": "satisfied|missing|version-mismatch", "installed_version": "string or null",
+        "evidence": {"reported_distribution": {"name": "raw name", "version": "raw version"} | null}
+      }]
     }
   ],
   "packages": [{
     "context_id": "interpreter or environment id",
     "python_path": "absolute executable used for this query or null",
     "status": "ok|unavailable|error",
-    "packages": [{"name": "distribution name", "version": "string"}]
+    "packages": [{"name": "distribution name", "version": "string"}],
+    "query_evidence": "same query evidence object attached to its requires edge"
   }],
   "context_resolution": {"directory": "path", "commands": []},
   "warnings": [{"source": "discovery stage", "message": "string", "path": "optional path"}]
@@ -703,35 +716,87 @@ def _package_record(
     context_id: str, python_path: str | None, warnings: WarningLog
 ) -> dict[str, Any]:
     if not python_path or not _is_executable_file(python_path):
-        return {"context_id": context_id, "python_path": python_path, "status": "unavailable", "packages": []}
+        return {
+            "context_id": context_id,
+            "python_path": python_path,
+            "status": "unavailable",
+            "packages": [],
+            "query_evidence": {
+                "available": False,
+                "python_path": python_path,
+                "command": None,
+                "raw_stdout": None,
+                "reason": "interpreter is unavailable or not executable",
+            },
+        }
+    query_python = _absolute(python_path)
+    command = [query_python, "-I", "-c", PACKAGES_SCRIPT]
     output = _run(
-        [python_path, "-I", "-c", PACKAGES_SCRIPT],
+        command,
         source="package-query",
         warnings=warnings,
-        path=python_path,
+        path=query_python,
         timeout=30,
     )
     if output is None:
         # Python 2 and early Python 3 do not understand -I.  This still never
         # imports a discovered package into Sphere itself; it merely gives the
         # target interpreter one sanitized fallback attempt.
+        command = [query_python, "-c", PACKAGES_SCRIPT]
         output = _run(
-            [python_path, "-c", PACKAGES_SCRIPT],
+            command,
             source="package-query-fallback",
             warnings=warnings,
-            path=python_path,
+            path=query_python,
             timeout=30,
         )
     if output is None:
-        return {"context_id": context_id, "python_path": python_path, "status": "error", "packages": []}
+        return {
+            "context_id": context_id,
+            "python_path": query_python,
+            "status": "error",
+            "packages": [],
+            "query_evidence": {
+                "available": False,
+                "python_path": query_python,
+                "command": command,
+                "raw_stdout": None,
+                "reason": "package query failed",
+            },
+        }
     try:
         packages = json.loads(output)
         if not isinstance(packages, list):
             raise ValueError("package result was not a list")
-        return {"context_id": context_id, "python_path": _absolute(python_path), "status": "ok", "packages": packages}
+        return {
+            "context_id": context_id,
+            "python_path": query_python,
+            "status": "ok",
+            "packages": packages,
+            "query_evidence": {
+                "available": True,
+                "python_path": query_python,
+                "command": command,
+                "raw_stdout": output,
+                "reason": None,
+            },
+        }
     except (TypeError, ValueError, json.JSONDecodeError) as error:
-        warnings.add("package-query", f"interpreter returned invalid package JSON: {error}", python_path)
-        return {"context_id": context_id, "python_path": _absolute(python_path), "status": "error", "packages": []}
+        reason = f"interpreter returned invalid package JSON: {error}"
+        warnings.add("package-query", reason, query_python)
+        return {
+            "context_id": context_id,
+            "python_path": query_python,
+            "status": "error",
+            "packages": [],
+            "query_evidence": {
+                "available": False,
+                "python_path": query_python,
+                "command": command,
+                "raw_stdout": output,
+                "reason": reason,
+            },
+        }
 
 
 def _repository_node(directory: str, warnings: WarningLog) -> tuple[dict[str, Any], list[Any]]:
@@ -813,6 +878,7 @@ def scan_topology(
                     "to": package_record["context_id"],
                     "verdict": aggregate_verdict(diff["requirements"]),
                     "package_query_status": diff["package_query_status"],
+                    "evidence": diff["query_evidence"],
                     "diff": diff["requirements"],
                 }
             )

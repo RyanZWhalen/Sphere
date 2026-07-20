@@ -10,6 +10,7 @@ import {
 } from '@xyflow/react';
 import { indexRepositoryRequiresEdges } from './topology.js';
 import { commandLine, planNarrative, stepState } from './fixplan.js';
+import { freshnessText, proofSentence, shellCommand } from './evidence.js';
 
 const STATUS = {
   satisfied: { label: 'Satisfied', color: '#38c987' },
@@ -245,6 +246,41 @@ function afterText(receipt) {
 
 const STEP_BADGE = { pending: '○', satisfied: '✓', done: '✓', error: '✕' };
 
+function EvidenceDetails({ item, queryEvidence, generatedAt }) {
+  const command = Array.isArray(queryEvidence?.command) ? queryEvidence.command : null;
+  const rawStdout = typeof queryEvidence?.raw_stdout === 'string' ? queryEvidence.raw_stdout : null;
+  return (
+    <details className="evidence">
+      <summary>Show evidence</summary>
+      <div className="evidence__body">
+        <div className="evidence__label">Verdict proof</div>
+        <p className="evidence__proof">{proofSentence(item, queryEvidence)}</p>
+
+        <div className="evidence__label">Interpreter scanned</div>
+        <code className="evidence__path">{queryEvidence?.python_path || 'Not retained for this scan.'}</code>
+
+        <div className="evidence__label">Exact command</div>
+        {command ? (
+          <pre className="evidence__command">{shellCommand(command)}</pre>
+        ) : (
+          <p className="evidence__unavailable">No command was run or retained.</p>
+        )}
+
+        <div className="evidence__label">Raw result</div>
+        {rawStdout != null ? (
+          <pre className="evidence__raw">{rawStdout}</pre>
+        ) : (
+          <p className="evidence__unavailable">
+            {queryEvidence?.reason || 'The raw interpreter result was not retained.'}
+          </p>
+        )}
+
+        <div className="evidence__freshness">{freshnessText(generatedAt)}</div>
+      </div>
+    </details>
+  );
+}
+
 function DiagnosisPanel({ diagnosis, loading, error }) {
   const problems = (diagnosis?.observations || []).filter((item) => item.status !== 'satisfied');
   return (
@@ -351,7 +387,7 @@ function FixPanel({ plan, verdict, planLoading, applying, fixError, done, receip
   );
 }
 
-function DiffInspector({ selectedTargetId, model, diagnosis, diagnosisLoading, diagnosisError, plan, receipts, planLoading, applying, fixError, done, onPreview, onApprove, onCancel, onCreateVenv }) {
+function DiffInspector({ selectedTargetId, model, generatedAt, diagnosis, diagnosisLoading, diagnosisError, plan, receipts, planLoading, applying, fixError, done, onPreview, onApprove, onCancel, onCreateVenv }) {
   const resolvedInterpreter = model.byId.get(model.resolvedId);
   const targetId = selectedTargetId || model.resolvedId;
   const active = model.requiresEdgeForTarget(targetId);
@@ -383,6 +419,7 @@ function DiffInspector({ selectedTargetId, model, diagnosis, diagnosisLoading, d
               <span className="status" style={{ color: STATUS[item.status].color }}>{STATUS[item.status].label}</span>
               <div className="diff-row__installed">Installed: {item.installed_version || '—'}</div>
               <div className="diff-row__source">{item.source}</div>
+              <EvidenceDetails item={item} queryEvidence={active.evidence} generatedAt={generatedAt} />
             </article>
           ))}
         </div>
@@ -596,6 +633,7 @@ function Graph({ topology, onTopologyChange }) {
       <DiffInspector
         selectedTargetId={selectedTargetId}
         model={model}
+        generatedAt={topology.generated_at}
         diagnosis={diagnosis}
         diagnosisLoading={diagnosisLoading}
         diagnosisError={diagnosisError}

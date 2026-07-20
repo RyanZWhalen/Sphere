@@ -262,7 +262,7 @@ def diff_requirements(
 ) -> dict[str, Any]:
     """Classify each declared requirement against one introspection package record."""
 
-    installed: dict[str, str] = {}
+    installed: dict[str, dict[str, str]] = {}
     packages = package_record.get("packages", [])
     if isinstance(packages, list):
         for package in packages:
@@ -270,14 +270,18 @@ def diff_requirements(
                 continue
             name, version = package.get("name"), package.get("version")
             if isinstance(name, str) and isinstance(version, str):
-                installed.setdefault(canonicalize_name(name), version)
+                installed.setdefault(canonicalize_name(name), {"name": name, "version": version})
 
     results: list[dict[str, Any]] = []
     for declared in requirements:
         requirement = declared.requirement
-        installed_version = installed.get(canonicalize_name(requirement.name))
+        reported_distribution = installed.get(canonicalize_name(requirement.name))
+        installed_version = reported_distribution["version"] if reported_distribution else None
         result = declared.as_json()
         result["installed_version"] = installed_version
+        result["evidence"] = {
+            "reported_distribution": dict(reported_distribution) if reported_distribution else None,
+        }
         if installed_version is None:
             result["status"] = "missing"
         else:
@@ -292,6 +296,7 @@ def diff_requirements(
         "context_id": package_record.get("context_id"),
         "python_path": package_record.get("python_path"),
         "package_query_status": package_record.get("status"),
+        "query_evidence": package_record.get("query_evidence"),
         "requirements": results,
     }
 

@@ -49,6 +49,16 @@ button { font: inherit; }
 .legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 21px; }.legend span { display: flex; align-items: center; gap: 6px; color: #98a6b7; font-size: 11px; }.legend i { width: 7px; height: 7px; border-radius: 50%; }
 .inspector__rule { height: 1px; margin: 21px 0 6px; background: #263243; }.inspector__empty { color: #768598; font-size: 12px; line-height: 1.5; }
 .diff-list { display: grid; gap: 0; }.diff-row { padding: 15px 0; border-bottom: 1px solid #202c3b; }.diff-row__name { color: #edf2f7; font-size: 13px; font-weight: 700; }.diff-row__specifier { margin-top: 3px; color: #78879a; font-family: ui-monospace, monospace; font-size: 11px; }.status { display: inline-block; margin-top: 9px; font-size: 10px; font-weight: 800; letter-spacing: .055em; text-transform: uppercase; }.diff-row__installed { margin-top: 4px; color: #bdc8d5; font-size: 11px; }.diff-row__source { margin-top: 3px; color: #66768a; font-size: 10px; }
+.evidence { margin-top: 10px; color: #8290a2; font-size: 10.5px; }
+.evidence summary { width: max-content; color: #8190a3; font-weight: 700; cursor: pointer; user-select: none; }
+.evidence[open] summary { color: #b6c1ce; }
+.evidence__body { display: grid; gap: 6px; margin-top: 10px; padding: 10px; border: 1px solid #263344; border-radius: 8px; background: #0d141d; }
+.evidence__label { margin-top: 4px; color: #65758a; font-size: 8.5px; font-weight: 800; letter-spacing: .075em; text-transform: uppercase; }
+.evidence__proof, .evidence__unavailable { margin: 0; color: #aab6c5; font-size: 10.5px; line-height: 1.5; }
+.evidence__path { overflow-wrap: anywhere; color: #b9c5d2; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 9.5px; line-height: 1.45; }
+.evidence__command, .evidence__raw { margin: 0; overflow: auto; padding: 8px; border-radius: 6px; background: #090e15; color: #9eacbd; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 9px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
+.evidence__raw { max-height: 150px; }
+.evidence__freshness { margin-top: 3px; color: #617187; font-size: 9px; line-height: 1.4; }
 .react-flow__controls { overflow: hidden; border: 1px solid #2d3a4b !important; border-radius: 8px !important; box-shadow: none !important; }.react-flow__controls-button { border-bottom-color: #2d3a4b !important; background: #151f2a !important; fill: #aeb9c7 !important; }.react-flow__edge-textbg { fill: #0f1620; }
 .loading-state { display: grid; place-content: center; gap: 8px; width: 100%; height: 100%; background: #0b1017; color: #eef3f8; text-align: center; }.loading-state span { color: #8997a8; font-size: 13px; }
 

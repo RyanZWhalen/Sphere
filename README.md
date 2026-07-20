@@ -7,14 +7,21 @@ Sphere supports one installation path: a dedicated project-local virtual environ
 Do not install Sphere or its server dependencies into a system, framework, Homebrew,
 pyenv, conda, or project interpreter—those are the runtimes Sphere is meant to observe.
 
-From the repository root, create and install the isolated environment:
+From the repository root, prepare everything for the demo with one command:
 
 ```bash
 make setup
 ```
 
-This creates `.sphere-venv` and installs the editable project with its `serve` extra
-inside it. Run Sphere using that environment's entry point directly:
+This creates `.sphere-venv`, installs Sphere and its `serve` extra inside it, and runs
+`demo.sh` to build the three states used by the walkthrough:
+
+- `demo/.venv-good` satisfies every declaration.
+- `demo/.venv-broken` has one version mismatch and two missing packages.
+- `demo/sample-project` has no environment, so the folder resolves to a bare/shared
+  interpreter that Sphere refuses to modify.
+
+When setup finishes, run Sphere using its isolated entry point:
 
 ```bash
 .sphere-venv/bin/sphere demo/sample-project --search-root demo
@@ -24,6 +31,21 @@ The command starts the localhost-only server on a free port and opens the graph 
 your browser. Scanning and diagnosis are read-only. Sphere only changes a selected
 environment after it shows the exact package plan and you choose **Approve & run**.
 `.sphere-venv` is local state and must never be committed.
+
+Those two commands, in that order, are the complete judge/demo path. Running Sphere
+without `make setup` first does not guarantee the three-state fixture exists.
+
+## Demo checklist
+
+The initial folder target is the bare/shared interpreter case. It remains red because
+Sphere refuses to pollute it. Click `.venv-broken` to see the mismatch/missing contrast,
+then click `.venv-good` to see the fully satisfied target.
+
+Every requirement row has a collapsed **Show evidence** control. Open one to inspect
+the exact interpreter path, rerunnable metadata command, verbatim distribution-list
+result, per-requirement proof, and live topology timestamp. On `.venv-broken`, `six`
+demonstrates version-mismatch evidence; `idna` demonstrates honest absence from the
+returned list.
 
 ## Local repair agent
 

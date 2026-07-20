@@ -10,7 +10,7 @@
 #
 # Run:
 #   ./demo.sh
-#   python3 -m sphere.introspect --indent 2 --search-root demo demo/sample-project
+#   .sphere-venv/bin/sphere demo/sample-project --search-root demo
 #
 # Override the base interpreter with:  PYTHON=/path/to/python3 ./demo.sh
 
@@ -63,5 +63,5 @@ make_venv "$DEMO_DIR/.venv-broken" "six==1.15.0"
 echo
 echo "Done. Three-state topology is ready. Point Sphere at it:"
 echo
-echo "    python3 -m sphere.introspect --indent 2 --search-root $DEMO_DIR $PROJECT_DIR"
+echo "    .sphere-venv/bin/sphere $PROJECT_DIR --search-root $DEMO_DIR"
 echo
