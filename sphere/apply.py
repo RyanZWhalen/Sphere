@@ -1,10 +1,12 @@
 """Execute an approved command-plan and prove the result by re-scanning.
 
-This is the only write surface in Sphere.  It runs each step's exact ``argv``
-against the target environment's *own* interpreter (``[interpreter_path, "-m",
-"pip", ...]``), which is the write-side mirror of the read-side isolation
-invariant: installs can only ever land in the target the plan named, never in
-Sphere's own process or ``.sphere-venv``.
+This is the only write surface in Sphere.  It runs each package step's exact
+``argv`` against the target environment's *own* interpreter
+(``[interpreter_path, "-m", "pip", ...]``), which is the write-side mirror of
+the read-side isolation invariant: installs can only ever land in the target the
+plan named, never in Sphere's own process or ``.sphere-venv``. A separately
+guarded ``remove-venv`` step can remove only the project-local venv that its
+fingerprint-matched plan named.
 
 ``execute_plan`` is a generator yielding one event dict per stage, so the server
 can stream per-action receipts as they happen and tests can assert the event
@@ -19,6 +21,7 @@ loop stops rather than pretending the fix landed.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import time
 from collections.abc import Callable, Iterable, Iterator, Sequence
@@ -45,6 +48,7 @@ CommandRunner = Callable[[Sequence[str]], dict[str, Any]]
 PackageQuery = Callable[[str, str | None], dict[str, Any]]
 # A re-scan returns a fresh full topology.
 Rescan = Callable[[], dict[str, Any]]
+VenvRemover = Callable[[str | None], dict[str, Any]]
 
 
 def _tail(text: str | None) -> str:
@@ -95,6 +99,59 @@ def _run_command(command: Sequence[str]) -> dict[str, Any]:
     }
 
 
+def _remove_venv(environment_path: str | None) -> dict[str, Any]:
+    """Delete one real venv directory after the planner has narrowed the target.
+
+    This deliberately does not invoke a shell or accept glob patterns.  The plan
+    compiler restricts the path to a direct child of the repository; this final
+    check confirms it is still a genuine venv before deleting it.
+    """
+
+    start = time.monotonic()
+    if not environment_path:
+        return {
+            "exit_status": None,
+            "stdout_tail": "",
+            "stderr_tail": "",
+            "duration_ms": _elapsed_ms(start),
+            "error": "environment path is missing",
+        }
+    if os.path.islink(environment_path):
+        return {
+            "exit_status": None,
+            "stdout_tail": "",
+            "stderr_tail": "",
+            "duration_ms": _elapsed_ms(start),
+            "error": "refusing to remove a symlinked environment",
+        }
+    config_path = os.path.join(environment_path, "pyvenv.cfg")
+    if not os.path.isdir(environment_path) or not os.path.isfile(config_path):
+        return {
+            "exit_status": None,
+            "stdout_tail": "",
+            "stderr_tail": "",
+            "duration_ms": _elapsed_ms(start),
+            "error": "refusing to remove a path that is not a virtual environment",
+        }
+    try:
+        shutil.rmtree(environment_path)
+    except OSError as error:
+        return {
+            "exit_status": None,
+            "stdout_tail": "",
+            "stderr_tail": "",
+            "duration_ms": _elapsed_ms(start),
+            "error": str(error),
+        }
+    return {
+        "exit_status": 0,
+        "stdout_tail": f"Removed {environment_path}",
+        "stderr_tail": "",
+        "duration_ms": _elapsed_ms(start),
+        "error": None,
+    }
+
+
 def _elapsed_ms(start: float) -> int:
     return int((time.monotonic() - start) * 1000)
 
@@ -128,11 +185,21 @@ def _verdict_after(topology: dict[str, Any], repository_id: str, target_id: str)
     return None
 
 
+def _target_present(topology: dict[str, Any], target_id: str) -> bool:
+    """Check whether a target remained in the post-action topology."""
+
+    for nodes in (topology.get("nodes", {}) or {}).values():
+        if any(node.get("id") == target_id for node in nodes or []):
+            return True
+    return False
+
+
 def execute_plan(
     plan: Plan,
     requirements: Iterable[DeclaredRequirement],
     *,
     runner: CommandRunner = _run_command,
+    remover: VenvRemover = _remove_venv,
     package_query: PackageQuery = _query_packages,
     rescan: Rescan | None = None,
 ) -> Iterator[dict[str, Any]]:
@@ -156,7 +223,7 @@ def execute_plan(
     failed = False
 
     for step in plan.steps:
-        outcome = runner(step.command)
+        outcome = remover(plan.target.path) if step.action == "remove-venv" else runner(step.command)
         after: dict[str, Any] = {
             "interpreter_path": interpreter_path,
             "installed_version": None,
@@ -166,6 +233,8 @@ def execute_plan(
             if step.action == "create-venv":
                 # Creating an env has no package verdict; prove the interpreter now exists.
                 after["status"] = "created" if (interpreter_path and os.path.exists(interpreter_path)) else "failed"
+            elif step.action == "remove-venv":
+                after["status"] = "removed" if not os.path.lexists(plan.target.path or "") else "failed"
             else:
                 diff = diff_requirements(requirements, package_query(plan.target.id, interpreter_path))
                 match = _match_requirement(diff, step.package)
@@ -188,7 +257,10 @@ def execute_plan(
 
     topology = rescan() if rescan is not None else None
     if topology is not None:
-        plan.verdict_after = _verdict_after(topology, plan.repository["id"], plan.target.id)
+        if any(step.action == "remove-venv" for step in plan.steps):
+            plan.verdict_after = "present" if _target_present(topology, plan.target.id) else "removed"
+        else:
+            plan.verdict_after = _verdict_after(topology, plan.repository["id"], plan.target.id)
     yield {"event": "done", "failed": failed, "plan": plan.as_json(), "topology": topology}
 
 

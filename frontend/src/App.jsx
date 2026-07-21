@@ -31,6 +31,12 @@ function basename(path = '') {
   return path.split('/').filter(Boolean).pop() || path;
 }
 
+function dirname(path = '') {
+  const parts = path.split('/').filter(Boolean);
+  parts.pop();
+  return path.startsWith('/') ? `/${parts.join('/')}` : parts.join('/');
+}
+
 function shortPath(path = '') {
   const parts = path.split('/').filter(Boolean);
   return parts.length > 3 ? `…/${parts.slice(-3).join('/')}` : path;
@@ -311,9 +317,10 @@ function DiagnosisPanel({ diagnosis, loading, error }) {
   );
 }
 
-function FixPanel({ plan, verdict, planLoading, applying, fixError, done, receipts, onPreview, onApprove, onCancel, onCreateVenv }) {
+function FixPanel({ plan, verdict, removableEnvironment, planLoading, applying, fixError, done, receipts, onPreview, onRemove, onApprove, onCancel, onCreateVenv }) {
   const canOfferFix = verdict && verdict !== 'satisfied';
-  if (!canOfferFix && !plan) return null;
+  const isRemoval = plan?.steps?.some((step) => step.action === 'remove-venv');
+  if (!canOfferFix && !removableEnvironment && !plan) return null;
 
   return (
     <section className="fixpanel">
@@ -323,9 +330,18 @@ function FixPanel({ plan, verdict, planLoading, applying, fixError, done, receip
       </div>
 
       {!plan && (
-        <button type="button" className="btn btn--go" disabled={planLoading} onClick={onPreview}>
-          {planLoading ? 'Building plan…' : 'Preview fix'}
-        </button>
+        <div className="fixpanel__choices">
+          {canOfferFix && (
+            <button type="button" className="btn btn--go" disabled={planLoading} onClick={onPreview}>
+              {planLoading ? 'Building plan…' : 'Preview fix'}
+            </button>
+          )}
+          {removableEnvironment && (
+            <button type="button" className="btn btn--danger" disabled={planLoading} onClick={onRemove}>
+              {planLoading ? 'Building plan…' : 'Preview environment removal'}
+            </button>
+          )}
+        </div>
       )}
 
       {fixError && <p className="fixpanel__error">{fixError}</p>}
@@ -368,17 +384,20 @@ function FixPanel({ plan, verdict, planLoading, applying, fixError, done, receip
 
           {!done && (
             <div className="fixpanel__actions">
-              <button type="button" className="btn btn--go" disabled={applying} onClick={onApprove}>
-                {applying ? 'Running…' : 'Approve & run'}
+              <button type="button" className={`btn ${isRemoval ? 'btn--danger' : 'btn--go'}`} disabled={applying} onClick={onApprove}>
+                {applying ? (isRemoval ? 'Removing…' : 'Running…') : (isRemoval ? 'Approve & remove' : 'Approve & run')}
               </button>
               {!applying && <button type="button" className="btn btn--ghost" onClick={onCancel}>Cancel</button>}
             </div>
           )}
 
           {done && plan.verdict_after != null && (
-            <div className={`fixpanel__outcome ${plan.verdict_after === 'satisfied' ? 'is-good' : 'is-bad'}`}>
-              <strong>{plan.verdict_before} → {plan.verdict_after}</strong>
-              <span>{plan.verdict_after === 'satisfied' ? 'All requirements satisfied. Graph re-scanned.' : 'Not fully resolved — see the receipts above.'}</span>
+            <div className={`fixpanel__outcome ${(plan.verdict_after === 'satisfied' || plan.verdict_after === 'removed') ? 'is-good' : 'is-bad'}`}>
+              <strong>{isRemoval ? `Environment ${plan.verdict_after}` : `${plan.verdict_before} → ${plan.verdict_after}`}</strong>
+              <span>{isRemoval
+                ? (plan.verdict_after === 'removed' ? 'Environment removed. Graph re-scanned.' : 'Environment remains — see the receipt above.')
+                : (plan.verdict_after === 'satisfied' ? 'All requirements satisfied. Graph re-scanned.' : 'Not fully resolved — see the receipts above.')}
+              </span>
             </div>
           )}
         </>
@@ -387,9 +406,10 @@ function FixPanel({ plan, verdict, planLoading, applying, fixError, done, receip
   );
 }
 
-function DiffInspector({ selectedTargetId, model, generatedAt, diagnosis, diagnosisLoading, diagnosisError, plan, receipts, planLoading, applying, fixError, done, onPreview, onApprove, onCancel, onCreateVenv }) {
+function DiffInspector({ selectedTargetId, model, generatedAt, diagnosis, diagnosisLoading, diagnosisError, plan, receipts, planLoading, applying, fixError, done, onPreview, onRemove, onApprove, onCancel, onCreateVenv }) {
   const resolvedInterpreter = model.byId.get(model.resolvedId);
   const targetId = selectedTargetId || model.resolvedId;
+  const target = model.byId.get(targetId);
   const active = model.requiresEdgeForTarget(targetId);
   // Never fall through to any edge attached to the target. installed_version
   // is read exclusively from this exact repository -> target requires edge.
@@ -399,6 +419,10 @@ function DiffInspector({ selectedTargetId, model, generatedAt, diagnosis, diagno
   const summary = diff.length
     ? `This folder resolves to ${displayInterpreter(resolvedInterpreter)}, ${missing} of ${diff.length} requirements missing${mismatch ? `, ${mismatch} mismatched` : ''}.`
     : `This folder resolves to ${displayInterpreter(resolvedInterpreter)}. No declared requirements were found.`;
+  const removableEnvironment = target?.kind === 'venv'
+    && target?.path
+    && model.repository?.path
+    && dirname(target.path) === model.repository.path;
   return (
     <aside className="inspector">
       <div className="inspector__eyebrow">Dependency inspector</div>
@@ -430,12 +454,14 @@ function DiffInspector({ selectedTargetId, model, generatedAt, diagnosis, diagno
       <FixPanel
         plan={plan}
         verdict={active?.verdict}
+        removableEnvironment={removableEnvironment}
         planLoading={planLoading}
         applying={applying}
         fixError={fixError}
         done={done}
         receipts={receipts}
         onPreview={onPreview}
+        onRemove={onRemove}
         onApprove={onApprove}
         onCancel={onCancel}
         onCreateVenv={onCreateVenv}
@@ -553,6 +579,11 @@ function Graph({ topology, onTopologyChange }) {
 
   const previewCreateVenv = () => requestPlan({ create_venv: true });
 
+  const previewRemoveVenv = () => {
+    const targetId = selectedTargetId || model.resolvedId;
+    if (targetId) requestPlan({ target_id: targetId, remove_venv: true });
+  };
+
   const handleEvent = (event) => {
     if (event.event === 'plan') setPlan(event.plan);
     else if (event.event === 'receipt') setReceipts((prev) => ({ ...prev, [event.index]: event.step.receipt }));
@@ -644,6 +675,7 @@ function Graph({ topology, onTopologyChange }) {
         fixError={fixError}
         done={done}
         onPreview={previewPlan}
+        onRemove={previewRemoveVenv}
         onApprove={approveAndRun}
         onCancel={clearFix}
         onCreateVenv={previewCreateVenv}

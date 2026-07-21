@@ -21,7 +21,7 @@ from typing import Any
 
 from sphere.apply import default_rescan, execute_plan
 from sphere.diagnose import build_diagnosis
-from sphere.fixplan import build_create_venv_plan, build_plan
+from sphere.fixplan import build_create_venv_plan, build_plan, build_remove_venv_plan
 from sphere.introspect import scan_topology
 from sphere.requirements import parse_repository_requirements
 
@@ -72,8 +72,15 @@ def create_app(
         return directory, list(search_roots)
 
     def _compile(scan: dict[str, Any], repository: dict[str, Any], payload: dict[str, Any]) -> Any:
-        """Build the right plan flavor: a create-venv plan or a target-fix plan."""
+        """Build the right plan flavor: a repair, creation, or removal plan."""
 
+        if payload.get("remove_venv"):
+            return build_remove_venv_plan(
+                scan,
+                repository["id"],
+                payload["target_id"],
+                protected_prefixes=_protected_prefixes(),
+            )
         if payload.get("create_venv"):
             return build_create_venv_plan(
                 scan,
@@ -86,6 +93,8 @@ def create_app(
         )
 
     def _require_target(payload: dict[str, Any]) -> None:
+        if payload.get("create_venv") and payload.get("remove_venv"):
+            raise HTTPException(status_code=400, detail="create_venv and remove_venv cannot be combined")
         if not payload.get("create_venv") and not payload.get("target_id"):
             raise HTTPException(status_code=400, detail="target_id is required")
 
@@ -126,7 +135,7 @@ def create_app(
 
     @app.post("/api/plan")
     def plan(payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
-        """Compile (but never run) the command-plan IR for a target or a new venv."""
+        """Compile (but never run) a repair, creation, or guarded removal plan."""
 
         _require_target(payload)
         scan_directory, scan_roots = _scan_args(payload)

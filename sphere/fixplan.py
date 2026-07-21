@@ -27,6 +27,7 @@ Plan schema (plan_schema_version = "1.0")
     "id": "environment or interpreter id",
     "type": "environment | interpreter",
     "kind": "venv | uv-project | conda | null",
+    "path": "canonical environment directory when the target is an environment, or null",
     "interpreter_path": "the executable pip runs against, or null",
     "writable": "boolean; false means execution is refused",
     "block_reason": "why the target is not writable, or null"
@@ -35,7 +36,7 @@ Plan schema (plan_schema_version = "1.0")
   "verdict_after": "same, filled by the post-execution re-scan (null until then)",
   "steps": [{
     "index": 0,
-    "action": "install | upgrade | downgrade | uninstall",
+    "action": "install | upgrade | downgrade | uninstall | create-venv | remove-venv",
     "package": "PEP 503 canonicalized name",
     "specifier": "declared PEP 440 specifier ('' means any version)",
     "requirement": "full serialized PEP 508 requirement",
@@ -123,6 +124,7 @@ class PlanTarget:
     id: str
     type: str
     kind: str | None
+    path: str | None
     interpreter_path: str | None
     writable: bool
     block_reason: str | None
@@ -132,6 +134,7 @@ class PlanTarget:
             "id": self.id,
             "type": self.type,
             "kind": self.kind,
+            "path": self.path,
             "interpreter_path": self.interpreter_path,
             "writable": self.writable,
             "block_reason": self.block_reason,
@@ -339,6 +342,7 @@ def build_plan(
             id=target_id,
             type="environment" if group == "environments" else "interpreter",
             kind=target_node.get("kind"),
+            path=target_node.get("path"),
             interpreter_path=interpreter_path,
             writable=writable,
             block_reason=block_reason,
@@ -439,11 +443,114 @@ def build_create_venv_plan(
             id=f"environment:{venv_path}",
             type="environment",
             kind="venv",
+            path=venv_path,
             interpreter_path=venv_python,
             writable=writable,
             block_reason=block_reason,
         ),
         verdict_before="missing",
+        steps=steps,
+        fingerprint=fingerprint,
+    )
+
+
+def _is_direct_child(path: str, parent: str) -> bool:
+    """Return whether ``path`` is immediately inside ``parent`` after canonicalization."""
+
+    try:
+        return os.path.dirname(_canonical(path)) == _canonical(parent)
+    except (OSError, ValueError):
+        return False
+
+
+def _classify_removal_target(
+    node: Mapping[str, Any],
+    group: str | None,
+    repository_path: str,
+    protected_prefixes: Sequence[str],
+) -> tuple[bool, str | None]:
+    """Allow removal only for a project-local, non-tool-owned virtual environment."""
+
+    environment_path = node.get("path")
+    if group != "environments" or node.get("kind") != "venv":
+        return False, "Only a project-local Python virtual environment can be removed."
+    if not isinstance(environment_path, str) or not _is_direct_child(environment_path, repository_path):
+        return False, "Only a virtual environment directly inside this repository can be removed."
+
+    canonical_environment = _canonical(environment_path)
+    for prefix in protected_prefixes:
+        if prefix == canonical_environment or prefix.startswith(canonical_environment + os.sep):
+            return False, "This is Sphere's own environment; refusing to remove the tool's runtime."
+    return True, None
+
+
+def build_remove_venv_plan(
+    topology: Mapping[str, Any],
+    repository_id: str,
+    target_id: str,
+    *,
+    producer: str = "diff-compiler",
+    protected_prefixes: Sequence[str] | None = None,
+    generated_at: str | None = None,
+) -> Plan:
+    """Compile a guarded plan to remove one project-local virtual environment.
+
+    Removal is intentionally narrower than package repair: it is offered only for
+    a ``venv`` directory that is an immediate child of the repository selected by
+    the scan.  The plan still requires a preview and fingerprint-matched approval
+    before :func:`sphere.apply.execute_plan` performs the deletion.
+    """
+
+    if protected_prefixes is None:
+        protected_prefixes = (_canonical(sys.prefix),)
+    else:
+        protected_prefixes = tuple(_canonical(prefix) for prefix in protected_prefixes)
+
+    repository_node, _ = _find_node(topology, repository_id)
+    if repository_node is None:
+        raise ValueError(f"unknown repository: {repository_id!r}")
+    target_node, group = _find_node(topology, target_id)
+    if target_node is None:
+        raise ValueError(f"unknown target: {target_id!r}")
+
+    repository_path = repository_node.get("path") or ""
+    environment_path = target_node.get("path") or ""
+    writable, block_reason = _classify_removal_target(
+        target_node, group, repository_path, protected_prefixes
+    )
+    canonical_environment = _canonical(environment_path) if environment_path else None
+    interpreter_path = target_node.get("interpreter_path")
+    edge = _requires_edge(topology, repository_id, target_id)
+    verdict_before = edge.get("verdict", "unknown") if edge else "unknown"
+    steps = [
+        Step(
+            index=0,
+            action="remove-venv",
+            package=os.path.basename(canonical_environment or environment_path),
+            specifier="",
+            requirement=f"venv @ {canonical_environment or environment_path}",
+            source="sphere:remove-venv",
+            command=["sphere", "remove-venv", canonical_environment or environment_path],
+            before={"status": "present", "installed_version": None},
+            expected_after_status="removed",
+        )
+    ]
+    fingerprint = _fingerprint(interpreter_path, steps)
+    return Plan(
+        id=f"plan:{fingerprint[:12]}",
+        producer=producer,
+        generated_at=generated_at or datetime.now(UTC).isoformat(),
+        repository={"id": repository_node["id"], "path": repository_path},
+        target=PlanTarget(
+            id=target_id,
+            type="environment" if group == "environments" else "interpreter",
+            kind=target_node.get("kind"),
+            path=canonical_environment,
+            interpreter_path=interpreter_path,
+            writable=writable,
+            block_reason=block_reason,
+        ),
+        verdict_before=verdict_before,
         steps=steps,
         fingerprint=fingerprint,
     )

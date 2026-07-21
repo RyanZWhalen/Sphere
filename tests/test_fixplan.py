@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 import unittest
 
-from sphere.fixplan import build_create_venv_plan, build_plan
+from sphere.fixplan import build_create_venv_plan, build_plan, build_remove_venv_plan
 
 
 REPOSITORY_ID = "repository:/proj"
@@ -30,8 +30,8 @@ def _diff_item(name, specifier, status, installed_version, source="requirements.
 
 
 def _topology(diff, *, verdict="missing", target_id=ENV_ID, interpreter_path=ENV_INTERPRETER,
-              group="environments", kind="venv", discovered_by=None):
-    node = {"id": target_id, "path": interpreter_path}
+              target_path=None, group="environments", kind="venv", discovered_by=None):
+    node = {"id": target_id, "path": target_path or interpreter_path}
     if group == "environments":
         node.update({"type": "environment", "kind": kind, "interpreter_path": interpreter_path})
     else:
@@ -158,6 +158,48 @@ class BuildCreateVenvPlanTest(unittest.TestCase):
 
     def test_plan_blocked_when_new_venv_would_be_inside_sphere(self):
         plan = build_create_venv_plan(_create_venv_topology(), REPOSITORY_ID, protected_prefixes=["/proj/.venv"])
+        self.assertFalse(plan.target.writable)
+        self.assertIn("Sphere's own environment", plan.target.block_reason)
+
+
+class BuildRemoveVenvPlanTest(unittest.TestCase):
+    def _project_venv_topology(self, path="/proj/.venv"):
+        return _topology(
+            [],
+            verdict="satisfied",
+            target_id=f"environment:{path}",
+            interpreter_path=f"{path}/bin/python",
+            target_path=path,
+        )
+
+    def test_project_local_venv_gets_a_removal_plan(self):
+        target_id = "environment:/proj/.venv"
+        plan = build_remove_venv_plan(
+            self._project_venv_topology(), REPOSITORY_ID, target_id, protected_prefixes=["/nowhere"]
+        )
+
+        self.assertTrue(plan.target.writable)
+        self.assertEqual(plan.target.path, "/proj/.venv")
+        self.assertEqual([step.action for step in plan.steps], ["remove-venv"])
+        self.assertEqual(plan.steps[0].command, ["sphere", "remove-venv", "/proj/.venv"])
+        self.assertEqual(plan.steps[0].expected_after_status, "removed")
+
+    def test_removal_rejects_a_venv_outside_the_repository(self):
+        target_id = "environment:/demo/.venv-good"
+        plan = build_remove_venv_plan(
+            self._project_venv_topology("/demo/.venv-good"), REPOSITORY_ID, target_id,
+            protected_prefixes=["/nowhere"],
+        )
+
+        self.assertFalse(plan.target.writable)
+        self.assertIn("directly inside this repository", plan.target.block_reason)
+
+    def test_removal_rejects_spheres_own_environment(self):
+        target_id = "environment:/proj/.venv"
+        plan = build_remove_venv_plan(
+            self._project_venv_topology(), REPOSITORY_ID, target_id, protected_prefixes=["/proj/.venv"]
+        )
+
         self.assertFalse(plan.target.writable)
         self.assertIn("Sphere's own environment", plan.target.block_reason)
 

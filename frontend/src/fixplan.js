@@ -25,7 +25,14 @@ export function planNarrative(plan) {
   if (!target.writable) return target.block_reason || 'This runtime cannot be modified.';
   const steps = plan.steps || [];
   if (steps.length === 0) return 'Nothing to do — this runtime already satisfies the requirements.';
-  const verb = { install: 'install', upgrade: 'upgrade', downgrade: 'downgrade', uninstall: 'remove' };
+  const verb = {
+    install: 'install',
+    upgrade: 'upgrade',
+    downgrade: 'downgrade',
+    uninstall: 'remove',
+    'create-venv': 'create',
+    'remove-venv': 'remove',
+  };
   const parts = steps.map((step) => `${verb[step.action] || step.action} ${step.package}`);
   return `${steps.length} action${steps.length === 1 ? '' : 's'}: ${parts.join(', ')}.`;
 }

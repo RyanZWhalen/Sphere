@@ -157,6 +157,8 @@ an explicit **Approve & run** action. Sphere:
   interpreters;
 - fingerprints previewed commands and rejects a stale plan;
 - targets an environment through its exact interpreter path;
+- allows removal only for a virtual environment directly inside the selected repository,
+  after a separate preview and explicit approval;
 - records command output and a per-step receipt; and
 - re-scans afterward to verify the resulting graph verdict.
 
@@ -195,6 +197,9 @@ The final command refreshes the committed `sphere/web/dist` bundle.
   setup with `PYTHON=/absolute/path/to/a/python3.11+`.
 - **A demo environment is missing:** run `make demo`, then restart Sphere so it
   performs a fresh scan.
+- **A project-local `.venv` should be removed:** select it in Sphere, choose
+  **Preview environment removal**, then review and choose **Approve & remove**.
+  Sphere will only offer this for a venv directly inside the selected repository.
 - **The browser does not open:** add `--no-browser`, copy the printed localhost URL,
   and open it manually.
 - **A port is occupied:** omit `--port` to let Sphere choose a free port.

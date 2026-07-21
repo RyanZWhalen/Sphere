@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import os
+import tempfile
 import unittest
 
 from packaging.requirements import Requirement
 
-from sphere.apply import execute_plan
-from sphere.fixplan import build_plan
+from sphere.apply import _remove_venv, execute_plan
+from sphere.fixplan import build_plan, build_remove_venv_plan
 from sphere.requirements import DeclaredRequirement
 
 
@@ -128,6 +130,53 @@ class ExecutePlanTest(unittest.TestCase):
 
         self.assertEqual([e["event"] for e in events], ["plan", "blocked"])
         self.assertEqual(ran, [])  # nothing executed
+
+    def test_removal_streams_a_receipt_and_confirms_the_target_disappeared(self):
+        target_path = "/proj/.venv"
+        target_id = f"environment:{target_path}"
+        topology = {
+            "nodes": {
+                "repositories": [{"id": REPOSITORY_ID, "type": "repository", "path": "/proj"}],
+                "environments": [{
+                    "id": target_id, "type": "environment", "kind": "venv", "path": target_path,
+                    "interpreter_path": f"{target_path}/bin/python",
+                }],
+                "interpreters": [], "contexts": [],
+            },
+            "edges": [{"type": "requires", "from": REPOSITORY_ID, "to": target_id, "verdict": "satisfied", "diff": []}],
+        }
+        plan = build_remove_venv_plan(topology, REPOSITORY_ID, target_id, protected_prefixes=["/nowhere"])
+        removed = []
+
+        events = list(execute_plan(
+            plan,
+            [],
+            runner=lambda _command: self.fail("a removal plan must not invoke the command runner"),
+            remover=lambda path: removed.append(path) or {
+                "exit_status": 0, "stdout_tail": "Removed", "stderr_tail": "", "duration_ms": 1, "error": None,
+            },
+            rescan=lambda: {"nodes": {"environments": []}, "edges": []},
+        ))
+
+        self.assertEqual(removed, [target_path])
+        receipt = next(event for event in events if event["event"] == "receipt")
+        self.assertEqual(receipt["step"]["receipt"]["after"]["status"], "removed")
+        self.assertEqual(events[-1]["plan"]["verdict_after"], "removed")
+
+    def test_remover_requires_an_actual_venv_marker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            environment = os.path.join(directory, ".venv")
+            os.mkdir(environment)
+
+            rejected = _remove_venv(environment)
+            self.assertIsNotNone(rejected["error"])
+            self.assertTrue(os.path.isdir(environment))
+
+            with open(os.path.join(environment, "pyvenv.cfg"), "w", encoding="utf-8") as config:
+                config.write("home = /tmp/python\n")
+            removed = _remove_venv(environment)
+            self.assertIsNone(removed["error"])
+            self.assertFalse(os.path.exists(environment))
 
 
 if __name__ == "__main__":

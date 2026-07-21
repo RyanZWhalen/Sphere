@@ -27,6 +27,12 @@ test('planNarrative summarizes writable plans and explains blocked ones', () => 
     steps: [{ action: 'upgrade', package: 'six' }, { action: 'install', package: 'idna' }],
   };
   assert.equal(planNarrative(plan), '2 actions: upgrade six, install idna.');
+
+  const removal = {
+    target: { writable: true },
+    steps: [{ action: 'remove-venv', package: '.venv' }],
+  };
+  assert.equal(planNarrative(removal), '1 action: remove .venv.');
 });
 
 test('planOutcome is null until applied, then reports before/after', () => {
